@@ -110,6 +110,13 @@ st.markdown(
     [class*="st-key-tile_"] [data-testid="stMarkdownContainer"], [class*="st-key-tile_"] .stMarkdown {{margin-bottom: 0 !important;}}
     [class*="st-key-tile_"] {{gap: 0 !important;}}
 
+    /* 추가: 영어 입력칸 + 자동완성 버튼 한 줄 (3:1) */
+    .st-key-addrow [data-testid="stHorizontalBlock"] {{flex-wrap: nowrap !important; gap: 8px;}}
+    .st-key-addrow [data-testid="stColumn"] {{min-width: 0 !important; width: auto !important;}}
+    .st-key-addrow [data-testid="stColumn"]:first-child {{flex: 3 1 0 !important;}}
+    .st-key-addrow [data-testid="stColumn"]:last-child {{flex: 1.1 1 0 !important;}}
+    .st-key-addrow .stButton button {{min-height: 2.5rem; height: 2.5rem; border-radius: 10px; padding: 0 4px; font-size: .92rem; white-space: nowrap;}}
+
     /* 추천 카드 아래 버튼 한 줄로 */
     [class*="st-key-rowrec"] [data-testid="stHorizontalBlock"] {{flex-wrap: nowrap !important; gap: 8px;}}
     [class*="st-key-rowrec"] [data-testid="stColumn"] {{min-width: 0 !important; width: auto !important; flex: 1 1 0 !important;}}
@@ -948,8 +955,11 @@ def page_add():
     tab1, tab2, tab3 = st.tabs(["하나씩", "여러 개 한번에", "🎲 추천"])
 
     with tab1:
-        st.text_input("영어", key="a_front", placeholder="e.g. look forward to")
-        st.button("✨ 뜻·예문 자동 완성", on_click=_autofill_one, width="stretch")
+        with st.container(key="addrow"):
+            c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+            # 엔터 치면 바로 자동 완성
+            c1.text_input("영어", key="a_front", placeholder="look forward to", on_change=_autofill_one)
+            c2.button("✨ 자동완성", on_click=_autofill_one, width="stretch")
         if ss.get("a_msg"):
             level, text = ss.pop("a_msg")
             getattr(st, level)(text)

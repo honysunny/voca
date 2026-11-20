@@ -28,9 +28,6 @@ KST = ZoneInfo("Asia/Seoul")
 
 PAGES = ["🏠 홈", "🃏 복습", "➕ 추가", "📝 퀴즈", "📋 목록"]
 
-# 경험치(XP) 규칙
-XP = {"good": 10, "hard": 5, "again": 2, "quiz_ok": 5, "quiz_ng": 1}
-XP_PER_LEVEL = 500
 
 # 하늘색 테마
 SKY, SKY_D, SKY_L, SKY_M = "#A9D7F3", "#2F6E96", "#F0F8FD", "#CFE9F8"
@@ -101,6 +98,18 @@ st.markdown(
     /* 퀴즈 보기 */
     .st-key-opts .stButton button {{justify-content: flex-start; text-align: left; padding: 0 18px;}}
 
+    /* 홈 타일: 타일 전체를 누를 수 있게 투명 버튼을 덮음 */
+    [class*="st-key-tile_"] {{position: relative;}}
+    [class*="st-key-tile_"] [data-testid="stElementContainer"]:has(.stButton) {{position: absolute; inset: 0; z-index: 5;}}
+    [class*="st-key-tile_"] .stButton, [class*="st-key-tile_"] .stButton button {{width: 100%; height: 100%;}}
+    [class*="st-key-tile_"] .stButton button {{opacity: 0; cursor: pointer;}}
+    .st-key-tiles [data-testid="stHorizontalBlock"] {{flex-wrap: nowrap !important; gap: 10px;}}
+    .st-key-tiles [data-testid="stColumn"] {{min-width: 0 !important; width: auto !important; flex: 1 1 0 !important;}}
+    .st-key-tiles {{gap: 10px !important; margin: 8px 0 14px;}}
+    .st-key-tiles [data-testid="stHorizontalBlock"] {{margin-bottom: 0 !important;}}
+    [class*="st-key-tile_"] [data-testid="stMarkdownContainer"], [class*="st-key-tile_"] .stMarkdown {{margin-bottom: 0 !important;}}
+    [class*="st-key-tile_"] {{gap: 0 !important;}}
+
     /* 추천 카드 아래 버튼 한 줄로 */
     [class*="st-key-rowrec"] [data-testid="stHorizontalBlock"] {{flex-wrap: nowrap !important; gap: 8px;}}
     [class*="st-key-rowrec"] [data-testid="stColumn"] {{min-width: 0 !important; width: auto !important; flex: 1 1 0 !important;}}
@@ -152,19 +161,19 @@ def get_conn():
     return conn
 
 
-def add_xp(xp, reviews=1):
+def log_review(n=1):
+    """연속 학습일 계산용: 오늘 복습/퀴즈 한 횟수 기록"""
     conn = get_conn()
     conn.execute(
-        """INSERT INTO stats(day, xp, reviews) VALUES(?,?,?)
-           ON CONFLICT(day) DO UPDATE SET xp = xp + excluded.xp, reviews = reviews + excluded.reviews""",
-        (today().isoformat(), xp, reviews),
+        """INSERT INTO stats(day, xp, reviews) VALUES(?,0,?)
+           ON CONFLICT(day) DO UPDATE SET reviews = reviews + excluded.reviews""",
+        (today().isoformat(), n),
     )
     conn.commit()
 
 
 def get_stats():
-    rows = get_conn().execute("SELECT day, xp, reviews FROM stats").fetchall()
-    total = sum(r["xp"] for r in rows)
+    rows = get_conn().execute("SELECT day, reviews FROM stats").fetchall()
     days = {r["day"] for r in rows if r["reviews"] > 0}
     t = today()
     d = t if t.isoformat() in days else t - timedelta(days=1)  # 오늘 아직 안 했어도 어제까지 이어졌으면 유지
@@ -174,13 +183,8 @@ def get_stats():
         d -= timedelta(days=1)
     td = next((r for r in rows if r["day"] == t.isoformat()), None)
     return {
-        "total": total,
-        "level": total // XP_PER_LEVEL + 1,
-        "in_level": total % XP_PER_LEVEL,
         "streak": streak,
         "done_today": t.isoformat() in days,
-        "today_xp": td["xp"] if td else 0,
-        "today_reviews": td["reviews"] if td else 0,
     }
 
 
@@ -344,6 +348,18 @@ def go_to(page):
     st.session_state.page = page
 
 
+def go_list(view):
+    st.session_state.page = "📋 목록"
+    st.session_state.list_view = view
+
+
+def tile_link(key, label, value, bg, fg, view):
+    """누르면 목록 탭의 해당 보기로 이동하는 타일"""
+    with st.container(key=f"tile_{key}"):
+        show(tile(f"{label} ›", value, bg, fg))
+        st.button(label, key=f"tilebtn_{key}", on_click=go_list, args=(view,))
+
+
 # ───────────────────────── 페이지: 홈 ─────────────────────────
 def page_home():
     df = load_df()
@@ -354,11 +370,7 @@ def page_home():
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <div style="font-size:24px;font-weight:800;color:{INK};letter-spacing:-0.03em;">영어 암기장</div>
       {pill(f"{fire} {s['streak']}일 연속", "#FFF2EC", "#A65E3E")}
-    </div>
-    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:{MUTED};">
-      <span>Lv. {s['level']}</span><span>{s['in_level']} / {XP_PER_LEVEL} XP</span>
     </div>""")
-    show(progress_html(s["in_level"] / XP_PER_LEVEL, f"오늘 +{s['today_xp']}"))
 
     if df.empty:
         show(f"""
@@ -375,7 +387,7 @@ def page_home():
     mastered = int((df["box"] >= MASTERED_BOX).sum())
 
     if due:
-        title, sub = f"{due}개 남았어", "오늘의 복습"
+        title, sub = f"{due}개", "오늘의 복습"
     else:
         title, sub = "오늘 복습 끝! 👏", "잘했어"
     show(f"""
@@ -388,13 +400,14 @@ def page_home():
     else:
         st.button("퀴즈로 한 번 더 다지기", on_click=go_to, args=("📝 퀴즈",), width="stretch")
 
-    show(f"""
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:8px 0 14px;">
-      {tile("오늘 복습한 것", f"{s['today_reviews']}개")}
-      {tile("암기 완료", f"{mastered}개", "#EFF9F4", "#2F6A57")}
-      {tile("전체 카드", f"{len(df)}개", "#F5F7F9", INK)}
-      {tile("총 경험치", f"{s['total']} XP", "#FFF8EC", "#8A6524")}
-    </div>""")
+    reviewed = int(df["last_reviewed"].fillna("").str.startswith(t).sum())
+    with st.container(key="tiles"):
+        c1, c2 = st.columns(2)
+        with c1:
+            tile_link("reviewed", "오늘 복습한 것", f"{reviewed}개", SKY_L, SKY_D, "오늘 복습한 것")
+        with c2:
+            tile_link("mastered", "암기 완료", f"{mastered}개", "#EFF9F4", "#2F6A57", "암기 완료")
+        tile_link("all", "전체 카드", f"{len(df)}개", "#F5F7F9", INK, "전체")
 
     counts = df["kind"].value_counts()
     show('<div style="display:flex;flex-wrap:wrap;gap:6px;">'
@@ -952,21 +965,20 @@ def _rv_answer(result):
     ss = st.session_state
     cid = ss.rv_queue.pop(0)
     grade(cid, result)
-    add_xp(XP[result])
-    ss.rv_xp = ss.get("rv_xp", 0) + XP[result]
+    log_review()
     if result == "again":
         ss.rv_queue.append(cid)  # 모르면 이번 세션 끝에 다시 나옴
     else:
         ss.rv_done += 1
     ss.rv_show = False
     if not ss.rv_queue:
-        ss.rv_msg = f"🎉 {ss.rv_total}개 복습 완료! +{ss.rv_xp} XP"
+        ss.rv_msg = f"🎉 {ss.rv_total}개 복습 완료!"
 
 
 def _rv_stop():
     ss = st.session_state
     ss.rv_queue = []
-    ss.rv_msg = f"{ss.rv_done}/{ss.rv_total}개 하고 멈췄어. +{ss.get('rv_xp', 0)} XP"
+    ss.rv_msg = f"{ss.rv_done}/{ss.rv_total}개 하고 멈췄어."
 
 
 def page_review():
@@ -991,7 +1003,7 @@ def page_review():
                 st.info("복습할 카드가 없어. 범위를 '전체에서 랜덤'으로 바꿔봐.")
             else:
                 ss.update(rv_queue=ids, rv_dir=direction, rv_show=False, rv_done=0,
-                          rv_total=len(ids), rv_xp=0)
+                          rv_total=len(ids))
                 st.rerun()
         return
 
@@ -1030,8 +1042,7 @@ def _qz_pick(opt):
     item = qz["items"][qz["i"]]
     qz["picked"] = opt
     ok = opt == item["ans"]
-    add_xp(XP["quiz_ok"] if ok else XP["quiz_ng"])
-    qz["xp"] = qz.get("xp", 0) + (XP["quiz_ok"] if ok else XP["quiz_ng"])
+    log_review()
     if ok:
         qz["score"] += 1
     else:
@@ -1088,7 +1099,7 @@ def page_quiz():
     items = qz["items"]
 
     if qz["i"] >= len(items):
-        show(card_html(f"{qz['score']} / {len(items)}", f"점수 · +{qz.get('xp', 0)} XP"))
+        show(card_html(f"{qz['score']} / {len(items)}", "점수"))
         if qz["wrong"]:
             st.markdown("##### 틀린 것")
             show("".join(
@@ -1141,6 +1152,17 @@ def _list_cards():
     df = load_df()
     if df.empty:
         st.info("카드가 없어.")
+        return
+
+    ss.setdefault("list_view", "전체")
+    mode = st.radio("보기", ["전체", "오늘 복습한 것", "암기 완료"], key="list_view", horizontal=True,
+                    label_visibility="collapsed")
+    if mode == "오늘 복습한 것":
+        df = df[df["last_reviewed"].fillna("").str.startswith(today().isoformat())]
+    elif mode == "암기 완료":
+        df = df[df["box"] >= MASTERED_BOX]
+    if df.empty:
+        st.info("오늘 복습한 카드가 아직 없어." if mode == "오늘 복습한 것" else "아직 암기 완료한 카드가 없어. 5단계까지 가면 여기 모여.")
         return
 
     q = st.text_input("🔍 검색", placeholder="영어, 뜻, 예문")

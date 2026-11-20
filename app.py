@@ -3,6 +3,7 @@
 실행: streamlit run app.py
 """
 import html
+import io
 import json
 import os
 import re
@@ -34,6 +35,11 @@ SKY, SKY_D, SKY_L, SKY_M = "#A9D7F3", "#2F6E96", "#F0F8FD", "#CFE9F8"
 SKY_ON = "#24506E"  # 연하늘 위에 올라가는 글씨
 DEEP = "#455B6C"    # 오늘의 복습 카드 · 주요 버튼
 HERO_BG = "#CFE7F6"  # 오늘의 복습 카드 배경
+
+# Claude에게 물어보기 버튼이 열 주소.
+# 비워두면 새 채팅을 열고 질문을 미리 채워줌. 프로젝트 주소(https://claude.ai/project/...)를 넣으면
+# 그 프로젝트가 열리고, 질문은 앱에서 복사해서 붙여넣으면 됨.
+CLAUDE_URL = ""
 SURF, NAVBG = "#fff", "rgba(255,255,255,.96)"
 INK, MUTED, LINE = "#2E3E4B", "#7F909D", "#E5F0F7"
 
@@ -60,6 +66,12 @@ st.markdown(
         background: {SKY} !important; border-color: {SKY} !important; color: {DEEP} !important;
     }}
     button[kind="primary"]:hover, [data-testid="stBaseButton-primary"]:hover {{background: #96CBEE !important;}}
+
+    /* 링크 버튼 (Claude에게 물어보기) */
+    .stLinkButton a {{
+        min-height: 3.1rem; border-radius: 14px; font-weight: 600; font-size: 1.02rem;
+        border: 1.5px solid {LINE}; background: {SURF}; color: {INK} !important;
+    }}
 
     /* 상단 탭바 */
     .st-key-nav {{
@@ -149,6 +161,7 @@ def get_conn():
             last_reviewed TEXT
         )"""
     )
+    conn.execute("CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT)")
     conn.execute(
         """CREATE TABLE IF NOT EXISTS bank(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -332,8 +345,106 @@ def _iframe(src, height):
         components.html(src, height=height)
 
 
+VOICES = {  # 이름: Edge 음성 ID
+    "미국 여자": "en-US-JennyNeural",
+    "미국 남자": "en-US-GuyNeural",
+    "영국 여자": "en-GB-SoniaNeural",
+    "영국 남자": "en-GB-RyanNeural",
+}
+
+
+def get_setting(key, default=""):
+    row = get_conn().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key, value):
+    conn = get_conn()
+    conn.execute("INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                 (key, value))
+    conn.commit()
+
+
+def current_voice():
+    name = get_setting("voice", "미국 여자")
+    return VOICES.get(name, VOICES["미국 여자"])
+
+
+@st.cache_data(ttl=7 * 86400, show_spinner=False)
+def edge_mp3(text, voice):
+    """Edge '소리 내어 읽기' 음성으로 mp3 만들기 (조금 느리게, 같은 단어는 일주일 저장)"""
+    import asyncio
+    import concurrent.futures
+
+    import edge_tts
+
+    async def run():
+        buf = io.BytesIO()
+        async for chunk in edge_tts.Communicate(text, voice, rate="-10%").stream():
+            if chunk["type"] == "audio":
+                buf.write(chunk["data"])
+        return buf.getvalue()
+
+    with concurrent.futures.ThreadPoolExecutor(1) as ex:  # Streamlit 안에서 안전하게 비동기 실행
+        data = ex.submit(asyncio.run, run()).result(timeout=20)
+    if not data:
+        raise RuntimeError("empty audio")
+    return data
+
+
+@st.cache_data(ttl=7 * 86400, show_spinner=False)
+def tts_mp3(text):
+    """구글 번역 음성으로 mp3 만들기 (같은 단어는 일주일 동안 저장해두고 재사용)"""
+    from gtts import gTTS
+
+    buf = io.BytesIO()
+    gTTS(text, lang="en", tld="com").write_to_fp(buf)
+    return buf.getvalue()
+
+
 def speak_button(text):
-    """브라우저 내장 TTS로 발음 듣기"""
+    """발음 재생 버튼. Edge 음성 → 구글 음성 → 브라우저 읽어주기 순으로 대체"""
+    clean = re.sub(r"~|-ing\b|…|\.\.\.", " ", str(text))
+    clean = re.sub(r"\s+", " ", clean).strip() or str(text)
+    ss = st.session_state
+    makers = [("edge", lambda: edge_mp3(clean, current_voice())), ("gtts", lambda: tts_mp3(clean))]
+    for name, make in makers:  # Edge → 구글 순서로 시도
+        if ss.get(f"{name}_down"):
+            continue  # 이번 접속에서 이미 실패했으면 기다리지 않고 건너뜀
+        try:
+            st.audio(make(), format="audio/mpeg")
+            return
+        except Exception:
+            ss[f"{name}_down"] = True
+    _browser_tts(clean)
+
+
+def ask_claude(front, back=""):
+    """Claude 채팅으로 넘어가는 버튼 + 질문 복사"""
+    front = str(front or "").strip()
+    if not front:
+        return
+    meaning = f" ({back})" if back else ""
+    prompt = (f"'{front}'{meaning} 뜻이랑 뉘앙스, 자주 쓰는 예문 3개(해석 포함), 비슷한 표현 알려줘. "
+              f"마지막에 `영어 | 뜻 | 예문` 형식으로 한 줄 정리해줘.")
+    url = CLAUDE_URL.strip() or "https://claude.ai/new?q=" + quote(prompt)
+    st.link_button("💬 Claude에게 물어보기", url, width="stretch")
+    with st.expander("질문 복사하기 (Claude에 질문이 안 채워졌을 때)"):
+        st.code(prompt, language=None, wrap_lines=True)
+
+
+def voice_picker():
+    names = list(VOICES)
+    cur = get_setting("voice", names[0])
+    sel = st.selectbox("발음 목소리", names, index=names.index(cur) if cur in names else 0, key="voice_sel")
+    if sel != cur:
+        set_setting("voice", sel)
+    with st.expander("🔊 목소리 미리듣기"):
+        speak_button("I'm really looking forward to the trip.")
+
+
+def _browser_tts(text):
+    """브라우저 내장 TTS로 발음 듣기 (일부 앱 내장 브라우저에선 안 됨)"""
     t = json.dumps(str(text)).replace("</", "<\\/")
     _iframe(
         f"""
@@ -970,6 +1081,7 @@ def page_add():
             # 엔터 치면 바로 자동 완성
             c1.text_input("영어", key="a_front", placeholder="look forward to", on_change=_autofill_one)
             c2.button("✨ 자동완성", on_click=_autofill_one, width="stretch")
+        ask_claude(ss.get("a_front", ""))
         if ss.get("a_msg"):
             level, text = ss.pop("a_msg")
             getattr(st, level)(text)
@@ -1062,6 +1174,7 @@ def page_review():
         direction = st.radio("방향", ["영어 → 뜻", "뜻 → 영어"], horizontal=True)
         scope = st.radio("범위", ["오늘 복습할 것", "전체에서 랜덤"], horizontal=True)
         limit = st.slider("최대 장수", 5, 100, 20, 5)
+        voice_picker()
         n_due = len(card_ids(kinds, True))
         st.caption(f"오늘 복습 대상: {n_due}개")
         if st.button("시작", type="primary", width="stretch", disabled=not kinds):
@@ -1100,6 +1213,7 @@ def page_review():
             b1.button("😵 몰라요", key="again", on_click=_rv_answer, args=("again",), width="stretch")
             b2.button("🤔 헷갈려", key="hard", on_click=_rv_answer, args=("hard",), width="stretch")
             b3.button("😎 알아요", key="good", on_click=_rv_answer, args=("good",), width="stretch")
+        ask_claude(c["front"], c["back"])
 
     st.write("")
     st.button("그만하기", on_click=_rv_stop)

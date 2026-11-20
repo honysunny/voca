@@ -707,7 +707,7 @@ def recommend(n, kinds, exclude=()):
 def rec_html(kind, front, back, example):
     ex = next((l for l in (example or "").splitlines() if l.strip()), "")
     back_html = (f'<div style="color:{INK};margin-top:4px;">{esc(back)}</div>' if back else
-                 f'<div style="color:{MUTED};font-size:13px;margin-top:4px;">뜻·예문은 추가할 때 자동으로 채워져</div>')
+                 f'<div style="color:{MUTED};font-size:13px;margin-top:4px;">뜻·예문은 추가할 때 자동으로 채워짐</div>')
     ex_html = f'<div style="color:{MUTED};font-size:14px;margin-top:4px;">{esc(ex)}</div>' if ex else ""
     return (f'<div style="background:{SURF};border:1.5px solid {LINE};border-radius:18px;padding:14px 16px;margin:4px 0 6px;">'
             f'{pill(kind)}<div style="font-size:1.25rem;font-weight:700;color:{INK};margin-top:8px;">{esc(front)}</div>'

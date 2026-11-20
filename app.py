@@ -561,7 +561,7 @@ def autofill(words):
 
 
 # ───────────────────────── 추천 (엑셀/CSV 목록에서 랜덤) ─────────────────────────
-BANK_FILES = ["bank.xlsx", "bank.csv"]  # 저장소에 이 이름으로 올려두면 앱이 재시작돼도 유지됨
+BANK_FILES = ["bank.xlsx", "bank.csv", "bank.pdf"]  # 저장소에 이 이름으로 올려두면 앱이 재시작돼도 유지됨
 COLMAP = {
     "front": ["front", "영어", "단어", "표현", "숙어", "구동사", "word", "phrase", "english", "expression"],
     "back": ["back", "뜻", "의미", "meaning", "korean", "한국어", "해석"],
@@ -600,9 +600,71 @@ def _parse_sheet(raw, sheet_kind=None):
     return rows
 
 
+class ScannedPDFError(Exception):
+    pass
+
+
+BULLET = re.compile(r"^\s*(?:\(?\d+\s*[.)]|[•▪●○■□◆◇\-–*·]|ex\)|e\.g\.)\s*", re.I)
+HEADING_WORDS = {"chapter", "unit", "lesson", "page", "part", "day", "exercise", "review", "test", "quiz"}
+
+
+def _split_pdf_line(line):
+    """'give up 포기하다', 'give up : 포기하다', 'look forward to (~을) 고대하다' → (영어, 뜻)"""
+    m = HANGUL.search(line)
+    if not m:
+        return None
+    en, ko = line[:m.start()], line[m.start():]
+    while en and en[-1] in " ([~〔<":  # 영어 끝에 붙은 (~ 같은 건 뜻 쪽으로
+        ko, en = en[-1] + ko, en[:-1]
+    en = BULLET.sub("", en).strip().rstrip(":：-–—=|·,").strip()
+    if not en or not re.search(r"[A-Za-z]", en) or len(en.split()) > 8:
+        return None
+    if sum(c.isascii() for c in en) / len(en) < 0.9:
+        return None
+    return en, ko.strip()
+
+
+def read_pdf(f):
+    import pdfplumber
+
+    lines = []
+    with pdfplumber.open(f) as pdf:
+        for page in pdf.pages:
+            lines += (page.extract_text() or "").splitlines()
+    if sum(len(l.strip()) for l in lines) < 20:
+        raise ScannedPDFError
+    rows, seen = [], set()
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        pair = _split_pdf_line(line)
+        if pair:
+            en, ko = pair
+            if en.lower() not in seen:
+                seen.add(en.lower())
+                rows.append([guess_kind(en), en, ko, ""])
+            continue
+        if HANGUL.search(line):
+            continue  # 한국어만 있는 줄(해석 등)은 건너뜀
+        text = BULLET.sub("", line).strip()
+        words = text.split()
+        # 영어 예문 → 바로 앞 항목에 붙이기
+        if len(words) >= 4 and text[-1:] in ".?!\"'" and rows and not rows[-1][3]:
+            rows[-1][3] = text
+        # 영어만 있는 짧은 줄 → 뜻 없는 항목 (뜻은 추가할 때 자동 완성)
+        elif (1 <= len(words) <= 5 and text[-1:] not in ".?!:" and re.fullmatch(r"[A-Za-z][A-Za-z '’\-~/()]*", text)
+              and words[0].lower() not in HEADING_WORDS and text.lower() not in seen):
+            seen.add(text.lower())
+            rows.append([guess_kind(text), text, "", ""])
+    return [tuple(r) for r in rows]
+
+
 def read_bank_file(f):
-    """엑셀(시트 여러 개 가능, 시트 이름이 '구동사'·'숙어'면 종류로 씀) 또는 CSV 읽기"""
+    """엑셀(시트 여러 개 가능, 시트 이름이 '구동사'·'숙어'면 종류로 씀), CSV, PDF 읽기"""
     name = str(getattr(f, "name", f)).lower()
+    if name.endswith(".pdf"):
+        return read_pdf(f)
     if name.endswith((".xlsx", ".xls")):
         sheets = pd.read_excel(f, sheet_name=None, header=None, dtype=str)
         return [row for sn, df in sheets.items() for row in _parse_sheet(df, str(sn).strip())]
@@ -721,25 +783,55 @@ def rec_tab():
         st.info("아직 추천 목록이 없어. 아래에서 엑셀이나 CSV 파일을 넣어줘.")
 
     with st.expander("📂 추천 목록 파일 넣기", expanded=not total):
-        st.caption("1열 영어, 2열 뜻(선택), 3열 예문(선택). 첫 줄에 `영어 / 뜻 / 예문 / 종류` 같은 제목이 있어도 돼. "
-                   "시트 이름을 `구동사`, `숙어`로 나눠두면 종류로 인식해.")
-        up = st.file_uploader("엑셀 또는 CSV", type=["xlsx", "xls", "csv"], key="bank_up")
-        if up and st.button("추천 목록에 넣기", type="primary", width="stretch"):
-            try:
-                rows = read_bank_file(up)
-            except Exception as e:
-                st.error(f"파일을 못 읽었어 ({e.__class__.__name__})")
-                rows = []
-            conn = get_conn()
-            before = conn.execute("SELECT COUNT(*) FROM bank").fetchone()[0]
-            conn.executemany("INSERT OR IGNORE INTO bank(kind, front, back, example) VALUES(?,?,?,?)", rows)
-            conn.commit()
-            added = conn.execute("SELECT COUNT(*) FROM bank").fetchone()[0] - before
-            ss.pop("rec_add", None)
-            ss.pop("rec_home", None)
-            st.success(f"{added}개 들어갔어 (중복 {len(rows) - added}개 제외)")
-        st.caption("💡 앱이 재시작되면 여기서 넣은 목록은 사라질 수 있어. 계속 쓸 거면 파일 이름을 `bank.xlsx`로 바꿔서 "
-                   "GitHub 저장소에 `app.py`랑 같이 올려두면 항상 유지돼.")
+        st.caption("엑셀·CSV: 1열 영어, 2열 뜻(선택), 3열 예문(선택). 첫 줄 제목이나 `구동사`·`숙어` 시트 이름도 인식해.  \n"
+                   "PDF: `give up 포기하다`처럼 영어 옆에 뜻이 있는 줄을 찾아내. 스캔한 이미지 PDF는 못 읽어.")
+        up = st.file_uploader("엑셀, CSV 또는 PDF", type=["xlsx", "xls", "csv", "pdf"], key="bank_up")
+        if up:
+            fkey = f"{up.name}_{up.size}"
+            if ss.get("bank_prev_key") != fkey:
+                ss.bank_prev_key = fkey
+                try:
+                    rows = read_bank_file(up)
+                    ss.bank_prev_err = "" if rows else "읽을 수 있는 항목을 못 찾았어."
+                except ScannedPDFError:
+                    rows, ss.bank_prev_err = [], "글자가 없는 PDF야 (스캔본으로 보여). 글자를 복사할 수 있는 PDF만 읽을 수 있어."
+                except Exception as e:
+                    rows, ss.bank_prev_err = [], f"파일을 못 읽었어 ({e.__class__.__name__})"
+                prev = pd.DataFrame(rows, columns=["kind", "front", "back", "example"])
+                prev.insert(0, "넣기", True)
+                ss.bank_prev = prev
+            if ss.get("bank_prev_err"):
+                st.warning(ss.bank_prev_err)
+            prev = ss.get("bank_prev")
+            if prev is not None and not prev.empty:
+                st.caption(f"{len(prev)}개 찾았어. 잘못 읽힌 줄은 체크를 빼거나 고쳐서 넣어.")
+                edited = st.data_editor(
+                    prev, key=f"bank_ed_{fkey}", hide_index=True, width="stretch",
+                    column_config={
+                        "넣기": st.column_config.CheckboxColumn("넣기", width="small"),
+                        "kind": st.column_config.SelectboxColumn("종류", options=KINDS),
+                        "front": "영어", "back": "뜻", "example": "예문",
+                    },
+                )
+                if st.button("추천 목록에 넣기", type="primary", width="stretch"):
+                    rows = []
+                    for _, r in edited.iterrows():
+                        front = str(r["front"] or "").strip()
+                        if r["넣기"] and front:
+                            kind = r["kind"] if r["kind"] in KINDS else guess_kind(front)
+                            rows.append((kind, front, str(r["back"] or "").strip(), str(r["example"] or "").strip()))
+                    conn = get_conn()
+                    before = conn.execute("SELECT COUNT(*) FROM bank").fetchone()[0]
+                    conn.executemany("INSERT OR IGNORE INTO bank(kind, front, back, example) VALUES(?,?,?,?)", rows)
+                    conn.commit()
+                    added = conn.execute("SELECT COUNT(*) FROM bank").fetchone()[0] - before
+                    ss.pop("rec_add", None)
+                    ss.pop("rec_home", None)
+                    ss.bank_prev = prev.iloc[0:0]
+                    ss.rec_msg = ("success", f"추천 목록에 {added}개 들어갔어 (중복 {len(rows) - added}개 제외)")
+                    st.rerun()
+        st.caption("💡 앱이 재시작되면 여기서 넣은 목록은 사라질 수 있어. 계속 쓸 거면 파일 이름을 `bank.xlsx`(또는 "
+                   "`bank.pdf`)로 바꿔서 GitHub 저장소에 `app.py`랑 같이 올려두면 항상 유지돼.")
         if get_conn().execute("SELECT COUNT(*) FROM bank").fetchone()[0]:
             if st.button("여기서 넣은 추천 목록 비우기"):
                 get_conn().execute("DELETE FROM bank")

@@ -375,7 +375,7 @@ def week_chart_html():
     for d, v in zip(days, vals):
         is_today = d == t
         h = max(4, round(v / top * 70)) if v else 4
-        color = SKY if v else "#E5EDF3"
+        color = "#F8CEBD" if v else "#F1E6E1"
         bars += (f'<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">'
                  f'<div style="font-size:11px;font-weight:600;color:{MUTED};height:14px;">{v or ""}</div>'
                  f'<div style="width:70%;max-width:28px;height:{h}px;background:{color};border-radius:6px;"></div>'

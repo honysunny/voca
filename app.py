@@ -25,18 +25,77 @@ MAX_BOX = len(INTERVALS) - 1
 MASTERED_BOX = 5
 KST = ZoneInfo("Asia/Seoul")
 
-PAGES = ["🏠 홈", "➕ 추가", "🃏 복습", "📝 퀴즈", "📋 목록", "💾 백업"]
+PAGES = ["🏠 홈", "🃏 복습", "➕ 추가", "📝 퀴즈", "📋 목록"]
+
+# 경험치(XP) 규칙
+XP = {"good": 10, "hard": 5, "again": 2, "quiz_ok": 5, "quiz_ng": 1}
+XP_PER_LEVEL = 500
+
+# 하늘색 테마
+SKY, SKY_D, SKY_L, SKY_M = "#2B9FE6", "#0B5E91", "#E4F4FD", "#9BD3F5"
+INK, MUTED, LINE = "#1B2B38", "#6B7F8E", "#D9EAF5"
 
 st.set_page_config(page_title="영어 암기장", page_icon="📚", layout="centered")
 
 st.markdown(
-    """
+    f"""
     <style>
-    #MainMenu, footer {visibility: hidden;}
-    header[data-testid="stHeader"], [data-testid="stToolbar"] {display: none;}
-    .block-container {padding-top: 3rem; padding-bottom: 5rem;}
-    div.stButton > button {min-height: 3rem; font-size: 1.05rem; border-radius: 12px;}
-    div[role="radiogroup"] {flex-wrap: wrap; gap: .25rem;}
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
+    .stApp, .stApp button, .stApp input, .stApp textarea {{
+        font-family: 'Pretendard', -apple-system, 'Apple SD Gothic Neo', sans-serif !important;
+    }}
+    #MainMenu, footer {{visibility: hidden;}}
+    header[data-testid="stHeader"], [data-testid="stToolbar"] {{display: none;}}
+    .block-container {{padding-top: 3.6rem; padding-bottom: 5rem; max-width: 560px;}}
+    h2, h3 {{letter-spacing: -0.02em; color: {INK};}}
+
+    /* 버튼 */
+    .stButton button, .stDownloadButton button {{
+        min-height: 3.1rem; font-size: 1.02rem; font-weight: 600;
+        border-radius: 14px; border: 1.5px solid {LINE}; background: #fff; color: {INK};
+    }}
+    button[kind="primary"], [data-testid="stBaseButton-primary"] {{
+        background: {SKY} !important; border-color: {SKY} !important; color: #fff !important;
+    }}
+    button[kind="primary"]:hover, [data-testid="stBaseButton-primary"]:hover {{background: #1E8AD0 !important;}}
+
+    /* 상단 탭바 */
+    .st-key-nav {{
+        position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+        background: rgba(255,255,255,.96); border-bottom: 1px solid {LINE}; padding: 6px 6px 0;
+    }}
+    .st-key-nav > div, .st-key-nav [data-testid="stElementContainer"], .st-key-nav [data-testid="stRadio"] {{
+        width: 100% !important;
+    }}
+    .st-key-nav [role="radiogroup"] {{
+        display: flex; flex-wrap: nowrap; justify-content: space-between; gap: 0;
+        width: 100%; max-width: 560px; margin: 0 auto;
+    }}
+    /* 각 메뉴 칸 (신버전: div > label[stRadioOption], 구버전: label[data-baseweb]) */
+    .st-key-nav [role="radiogroup"] > div, .st-key-nav label[data-baseweb="radio"] {{
+        flex: 1 1 0; display: flex; justify-content: center; margin: 0;
+        padding: 8px 0 10px; border-bottom: 3px solid transparent;
+    }}
+    .st-key-nav [role="radiogroup"] > div[data-selected="true"],
+    .st-key-nav label[data-baseweb="radio"]:has(input:checked) {{border-bottom-color: {SKY};}}
+    .st-key-nav [data-testid="stRadioOption"], .st-key-nav [data-testid="stRadioOption"] > div {{
+        width: 100%; justify-content: center; text-align: center;
+    }}
+    /* 라디오 동그라미 숨기기 */
+    .st-key-nav [data-testid="stRadioOption"] > div > div:first-child:not([data-testid]),
+    .st-key-nav label[data-baseweb="radio"] > div:first-child {{display: none !important;}}
+    .st-key-nav [role="radiogroup"] p {{font-size: 14px; font-weight: 600; color: {MUTED}; white-space: nowrap; margin: 0;}}
+    .st-key-nav [data-selected="true"] p, .st-key-nav label:has(input:checked) p {{color: {SKY_D};}}
+
+    /* 복습 평가 버튼 한 줄로 */
+    .st-key-grade [data-testid="stHorizontalBlock"] {{flex-wrap: nowrap !important; gap: 8px;}}
+    .st-key-grade [data-testid="stColumn"] {{min-width: 0 !important; width: auto !important; flex: 1 1 0 !important;}}
+    .st-key-again button {{background: #FDECEC !important; color: #9B2C2C !important; border: none !important;}}
+    .st-key-hard button {{background: #FFF3DC !important; color: #8A5A0B !important; border: none !important;}}
+    .st-key-good button {{background: {SKY} !important; color: #fff !important; border: none !important;}}
+
+    /* 퀴즈 보기 */
+    .st-key-opts .stButton button {{justify-content: flex-start; text-align: left; padding: 0 18px;}}
     </style>
     """,
     unsafe_allow_html=True,
@@ -64,8 +123,47 @@ def get_conn():
             last_reviewed TEXT
         )"""
     )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS stats(
+            day TEXT PRIMARY KEY,
+            xp INTEGER DEFAULT 0,
+            reviews INTEGER DEFAULT 0
+        )"""
+    )
     conn.commit()
     return conn
+
+
+def add_xp(xp, reviews=1):
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO stats(day, xp, reviews) VALUES(?,?,?)
+           ON CONFLICT(day) DO UPDATE SET xp = xp + excluded.xp, reviews = reviews + excluded.reviews""",
+        (today().isoformat(), xp, reviews),
+    )
+    conn.commit()
+
+
+def get_stats():
+    rows = get_conn().execute("SELECT day, xp, reviews FROM stats").fetchall()
+    total = sum(r["xp"] for r in rows)
+    days = {r["day"] for r in rows if r["reviews"] > 0}
+    t = today()
+    d = t if t.isoformat() in days else t - timedelta(days=1)  # 오늘 아직 안 했어도 어제까지 이어졌으면 유지
+    streak = 0
+    while d.isoformat() in days:
+        streak += 1
+        d -= timedelta(days=1)
+    td = next((r for r in rows if r["day"] == t.isoformat()), None)
+    return {
+        "total": total,
+        "level": total // XP_PER_LEVEL + 1,
+        "in_level": total % XP_PER_LEVEL,
+        "streak": streak,
+        "done_today": t.isoformat() in days,
+        "today_xp": td["xp"] if td else 0,
+        "today_reviews": td["reviews"] if td else 0,
+    }
 
 
 def now():
@@ -142,16 +240,58 @@ def grade(cid, result):
 
 
 # ───────────────────────── UI 헬퍼 ─────────────────────────
-def card_html(main, sub="", color=None):
-    border = color or "rgba(128,128,128,.35)"
-    sub_html = f'<div style="opacity:.6;margin-top:10px;font-size:.9rem;">{html.escape(sub)}</div>' if sub else ""
+def esc(s):
+    return html.escape(str(s or ""))
+
+
+def show(h):
+    st.markdown(h, unsafe_allow_html=True)
+
+
+def pill(text, bg=SKY_L, fg=SKY_D):
+    return (f'<span style="background:{bg};color:{fg};font-size:12px;font-weight:600;'
+            f'padding:4px 10px;border-radius:999px;">{esc(text)}</span>')
+
+
+def card_html(main, sub=""):
+    sub_html = f'<div style="margin-bottom:14px">{pill(sub)}</div>' if sub else ""
     return f"""
-    <div style="border:2px solid {border};border-radius:18px;padding:34px 16px;
-                text-align:center;margin:8px 0 14px;">
-      <div style="font-size:1.8rem;font-weight:700;line-height:1.35;word-break:break-word;">
-        {html.escape(str(main))}
-      </div>{sub_html}
+    <div style="background:#fff;border:2px solid {SKY_M};border-radius:22px;padding:30px 18px;
+                text-align:center;margin:6px 0 12px;">
+      {sub_html}
+      <div style="font-size:1.9rem;font-weight:700;line-height:1.3;color:{INK};word-break:break-word;">
+        {esc(main)}
+      </div>
     </div>"""
+
+
+def progress_html(ratio, right_text, color=SKY):
+    pct = max(0, min(100, round(ratio * 100)))
+    return f"""
+    <div style="display:flex;align-items:center;gap:10px;margin:4px 0 10px;">
+      <div style="flex:1;height:12px;background:{SKY_L};border-radius:999px;overflow:hidden;">
+        <div style="width:{pct}%;height:100%;background:{color};border-radius:999px;"></div>
+      </div>
+      <span style="font-size:13px;font-weight:600;color:{MUTED};white-space:nowrap;">{esc(right_text)}</span>
+    </div>"""
+
+
+def answer_html(answer, example="", note=""):
+    ex = "".join(f'<div style="margin-top:6px;font-size:15px;color:#0F5A44;">{esc(l)}</div>'
+                 for l in (example or "").splitlines() if l.strip())
+    nt = "".join(f'<div style="font-size:13px;color:{MUTED};margin-top:4px;">{esc(l)}</div>'
+                 for l in (note or "").splitlines() if l.strip())
+    nt = f'<div style="border-top:1px solid #CDEBDF;margin-top:10px;padding-top:8px;">{nt}</div>' if nt else ""
+    return f"""
+    <div style="background:#E6F6EF;border-radius:18px;padding:16px 18px;margin:0 0 12px;">
+      <div style="font-size:1.25rem;font-weight:700;color:#0B4A38;">{esc(answer)}</div>{ex}{nt}
+    </div>"""
+
+
+def tile(label, value, bg=SKY_L, fg=SKY_D):
+    return (f'<div style="background:{bg};border-radius:16px;padding:14px 16px;">'
+            f'<div style="font-size:13px;color:{fg};opacity:.8;">{esc(label)}</div>'
+            f'<div style="font-size:22px;font-weight:700;color:{fg};">{esc(value)}</div></div>')
 
 
 def _iframe(src, height):
@@ -167,8 +307,10 @@ def speak_button(text):
     t = json.dumps(str(text)).replace("</", "<\\/")
     _iframe(
         f"""
-        <button id="b" style="width:100%;padding:10px;border-radius:12px;border:1px solid #8884;
-               background:transparent;font-size:16px;cursor:pointer;color:#888;">🔊 발음 듣기</button>
+        <style>body{{margin:0}}</style>
+        <button id="b" style="width:100%;padding:10px;border-radius:14px;border:none;
+               background:{SKY_L};font-size:15px;font-weight:600;cursor:pointer;color:{SKY_D};
+               font-family:-apple-system,'Apple SD Gothic Neo',sans-serif;">🔊 발음 듣기</button>
         <script>
           document.getElementById('b').onclick = () => {{
             const u = new SpeechSynthesisUtterance({t});
@@ -186,38 +328,58 @@ def go_to(page):
 
 # ───────────────────────── 페이지: 홈 ─────────────────────────
 def page_home():
-    st.subheader("📚 영어 암기장")
     df = load_df()
+    s = get_stats()
+
+    fire = "🔥"
+    show(f"""
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div style="font-size:24px;font-weight:800;color:{INK};letter-spacing:-0.03em;">영어 암기장</div>
+      {pill(f"{fire} {s['streak']}일 연속", "#FFEDE6", "#9A3412")}
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:{MUTED};">
+      <span>Lv. {s['level']}</span><span>{s['in_level']} / {XP_PER_LEVEL} XP</span>
+    </div>""")
+    show(progress_html(s["in_level"] / XP_PER_LEVEL, f"오늘 +{s['today_xp']}"))
+
     if df.empty:
-        st.info("아직 카드가 없어. ➕ 추가에서 단어부터 넣어봐!")
-        st.button("단어 추가하러 가기 →", on_click=go_to, args=("➕ 추가",), width="stretch")
+        show(f"""
+        <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:#fff;margin:6px 0 10px;">
+          <div style="font-size:14px;opacity:.85;">시작해볼까?</div>
+          <div style="font-size:26px;font-weight:800;margin-top:2px;">첫 단어를 넣어봐</div>
+        </div>""")
+        st.button("단어 추가하기", type="primary", on_click=go_to, args=("➕ 추가",), width="stretch")
         return
 
     t = today().isoformat()
     due = int((df["due"] <= t).sum())
-    reviewed = int(df["last_reviewed"].fillna("").str.startswith(t).sum())
     mastered = int((df["box"] >= MASTERED_BOX).sum())
 
-    c1, c2 = st.columns(2)
-    c1.metric("오늘 복습할 것", f"{due}개")
-    c2.metric("오늘 복습한 것", f"{reviewed}개")
-    c3, c4 = st.columns(2)
-    c3.metric("전체", f"{len(df)}개")
-    c4.metric("암기 완료", f"{mastered}개", help=f"{MASTERED_BOX}단계 이상")
-
     if due:
-        st.button(f"지금 {due}개 복습하기 →", type="primary", on_click=go_to,
-                  args=("🃏 복습",), width="stretch")
+        title, sub = f"{due}개 남았어", "오늘의 복습"
     else:
-        st.success("오늘 복습 끝! 👏")
+        title, sub = "오늘 복습 끝! 👏", "잘했어"
+    show(f"""
+    <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:#fff;margin:6px 0 10px;">
+      <div style="font-size:14px;opacity:.85;">{sub}</div>
+      <div style="font-size:28px;font-weight:800;margin-top:2px;">{title}</div>
+    </div>""")
+    if due:
+        st.button("복습 시작하기", type="primary", on_click=go_to, args=("🃏 복습",), width="stretch")
+    else:
+        st.button("퀴즈로 한 번 더 다지기", on_click=go_to, args=("📝 퀴즈",), width="stretch")
 
-    st.markdown("##### 단계별 분포")
-    dist = df["box"].value_counts().reindex(range(MAX_BOX + 1), fill_value=0)
-    dist.index = [f"{i}단계" for i in dist.index]
-    st.bar_chart(dist)
+    show(f"""
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:8px 0 14px;">
+      {tile("오늘 복습한 것", f"{s['today_reviews']}개")}
+      {tile("암기 완료", f"{mastered}개", "#E6F6EF", "#0B4A38")}
+      {tile("전체 카드", f"{len(df)}개", "#F1F4F7", INK)}
+      {tile("총 경험치", f"{s['total']} XP", "#FFF3DC", "#7A4A06")}
+    </div>""")
 
-    st.markdown("##### 종류별")
-    st.dataframe(df["kind"].value_counts().rename("개수"), width="stretch")
+    counts = df["kind"].value_counts()
+    show('<div style="display:flex;flex-wrap:wrap;gap:6px;">'
+         + "".join(pill(f"{k} {counts.get(k, 0)}", "#F1F4F7", MUTED) for k in KINDS) + "</div>")
 
 
 # ───────────────────────── 자동 완성 ─────────────────────────
@@ -397,7 +559,7 @@ def page_add():
         ss.setdefault(k, "")
     ss.setdefault("a_kind", KINDS[0])
 
-    st.subheader("➕ 카드 추가")
+    st.subheader("카드 추가")
     if get_api_key():
         st.caption("✨ 자동 완성: Claude AI")
     else:
@@ -471,27 +633,29 @@ def _rv_answer(result):
     ss = st.session_state
     cid = ss.rv_queue.pop(0)
     grade(cid, result)
+    add_xp(XP[result])
+    ss.rv_xp = ss.get("rv_xp", 0) + XP[result]
     if result == "again":
         ss.rv_queue.append(cid)  # 모르면 이번 세션 끝에 다시 나옴
     else:
         ss.rv_done += 1
     ss.rv_show = False
     if not ss.rv_queue:
-        ss.rv_msg = f"🎉 {ss.rv_total}개 복습 완료!"
+        ss.rv_msg = f"🎉 {ss.rv_total}개 복습 완료! +{ss.rv_xp} XP"
 
 
 def _rv_stop():
     ss = st.session_state
     ss.rv_queue = []
-    ss.rv_msg = f"중단: {ss.rv_done}/{ss.rv_total}개 완료"
+    ss.rv_msg = f"{ss.rv_done}/{ss.rv_total}개 하고 멈췄어. +{ss.get('rv_xp', 0)} XP"
 
 
 def page_review():
     ss = st.session_state
     ss.setdefault("rv_queue", [])
-    st.subheader("🃏 플래시카드 복습")
 
     if not ss.rv_queue:
+        st.subheader("플래시카드 복습")
         if ss.get("rv_msg"):
             st.success(ss.pop("rv_msg"))
         kinds = st.multiselect("종류", KINDS, default=KINDS)
@@ -507,7 +671,8 @@ def page_review():
             if not ids:
                 st.info("복습할 카드가 없어. 범위를 '전체에서 랜덤'으로 바꿔봐.")
             else:
-                ss.update(rv_queue=ids, rv_dir=direction, rv_show=False, rv_done=0, rv_total=len(ids))
+                ss.update(rv_queue=ids, rv_dir=direction, rv_show=False, rv_done=0,
+                          rv_total=len(ids), rv_xp=0)
                 st.rerun()
         return
 
@@ -516,10 +681,10 @@ def page_review():
         ss.rv_queue.pop(0)
         st.rerun()
 
-    st.progress(ss.rv_done / ss.rv_total, text=f"{ss.rv_done} / {ss.rv_total}  ·  남은 카드 {len(ss.rv_queue)}")
+    show(progress_html(ss.rv_done / ss.rv_total, f"{ss.rv_done}/{ss.rv_total}"))
     en_first = ss.rv_dir == "영어 → 뜻"
     question = c["front"] if en_first else c["back"]
-    st.markdown(card_html(question, f"{c['kind']} · {c['box']}단계"), unsafe_allow_html=True)
+    show(card_html(question, f"{c['kind']} · {c['box']}단계"))
     if en_first:
         speak_button(c["front"])
 
@@ -527,19 +692,16 @@ def page_review():
         st.button("정답 보기", type="primary", on_click=_rv_show, width="stretch")
     else:
         answer = c["back"] if en_first else c["front"]
-        st.markdown(card_html(answer, color="#4caf50"), unsafe_allow_html=True)
+        show(answer_html(answer, c["example"], c["note"]))
         if not en_first:
             speak_button(c["front"])
-        if c["example"]:
-            st.markdown("\n".join(f"> {l}  " for l in c["example"].splitlines() if l.strip()))
-        if c["note"]:
-            st.caption("  \n".join(["📝"] + [l for l in c["note"].splitlines() if l.strip()]))
-        b1, b2, b3 = st.columns(3)
-        b1.button("😵 몰라요", on_click=_rv_answer, args=("again",), width="stretch")
-        b2.button("🤔 헷갈려요", on_click=_rv_answer, args=("hard",), width="stretch")
-        b3.button("😎 알아요", on_click=_rv_answer, args=("good",), type="primary", width="stretch")
+        with st.container(key="grade"):
+            b1, b2, b3 = st.columns(3)
+            b1.button("😵 몰라요", key="again", on_click=_rv_answer, args=("again",), width="stretch")
+            b2.button("🤔 헷갈려", key="hard", on_click=_rv_answer, args=("hard",), width="stretch")
+            b3.button("😎 알아요", key="good", on_click=_rv_answer, args=("good",), width="stretch")
 
-    st.divider()
+    st.write("")
     st.button("그만하기", on_click=_rv_stop)
 
 
@@ -548,7 +710,10 @@ def _qz_pick(opt):
     qz = st.session_state.qz
     item = qz["items"][qz["i"]]
     qz["picked"] = opt
-    if opt == item["ans"]:
+    ok = opt == item["ans"]
+    add_xp(XP["quiz_ok"] if ok else XP["quiz_ng"])
+    qz["xp"] = qz.get("xp", 0) + (XP["quiz_ok"] if ok else XP["quiz_ng"])
+    if ok:
         qz["score"] += 1
     else:
         qz["wrong"].append(item)
@@ -568,8 +733,9 @@ def _qz_reset():
 
 def page_quiz():
     ss = st.session_state
-    st.subheader("📝 4지선다 퀴즈")
     df = load_df()
+    if "qz" not in ss:
+        st.subheader("4지선다 퀴즈")
     if len(df) < 4:
         st.info("퀴즈는 카드가 4개 이상 있어야 해.")
         return
@@ -603,42 +769,56 @@ def page_quiz():
     items = qz["items"]
 
     if qz["i"] >= len(items):
-        st.markdown(card_html(f"{qz['score']} / {len(items)}", "점수"), unsafe_allow_html=True)
+        show(card_html(f"{qz['score']} / {len(items)}", f"점수 · +{qz.get('xp', 0)} XP"))
         if qz["wrong"]:
             st.markdown("##### 틀린 것")
-            for w in qz["wrong"]:
-                st.markdown(f"- **{w['front']}** — {w['back']}")
+            show("".join(
+                f'<div style="background:#fff;border:1.5px solid {LINE};border-radius:14px;padding:10px 14px;margin-bottom:8px;">'
+                f'<b style="color:{INK}">{esc(w["front"])}</b><div style="color:{MUTED};font-size:14px;">{esc(w["back"])}</div></div>'
+                for w in qz["wrong"]))
         else:
             st.balloons()
         st.button("다시 하기", type="primary", on_click=_qz_reset, width="stretch")
         return
 
     item = items[qz["i"]]
-    st.progress(qz["i"] / len(items), text=f"{qz['i'] + 1} / {len(items)}  ·  맞힌 수 {qz['score']}")
-    st.markdown(card_html(item["q"], item["kind"]), unsafe_allow_html=True)
+    show(progress_html(qz["i"] / len(items), f"{qz['i'] + 1}/{len(items)} · 맞힌 {qz['score']}"))
+    show(card_html(item["q"], item["kind"]))
 
-    for k, opt in enumerate(item["opts"]):
-        if qz["picked"] is None:
-            st.button(opt, key=f"qz_{qz['i']}_{k}", on_click=_qz_pick, args=(opt,), width="stretch")
-        elif opt == item["ans"]:
-            st.success(f"✅ {opt}")
-        elif opt == qz["picked"]:
-            st.error(f"❌ {opt}")
-        else:
-            st.markdown(f"<div style='padding:.6rem 1rem;opacity:.5'>{html.escape(opt)}</div>", unsafe_allow_html=True)
+    with st.container(key="opts"):
+        for k, opt in enumerate(item["opts"]):
+            if qz["picked"] is None:
+                st.button(opt, key=f"qz_{qz['i']}_{k}", on_click=_qz_pick, args=(opt,), width="stretch")
+            else:
+                if opt == item["ans"]:
+                    bg, fg, bd, mark = "#E6F6EF", "#0B4A38", "#7CCFAE", "✅ "
+                elif opt == qz["picked"]:
+                    bg, fg, bd, mark = "#FDECEC", "#9B2C2C", "#F2A7A7", "❌ "
+                else:
+                    bg, fg, bd, mark = "#fff", MUTED, LINE, ""
+                show(f'<div style="background:{bg};color:{fg};border:1.5px solid {bd};border-radius:14px;'
+                     f'padding:13px 18px;margin-bottom:10px;font-weight:600;">{mark}{esc(opt)}</div>')
 
     if qz["picked"] is not None:
         speak_button(item["front"])
         st.button("다음 →", type="primary", on_click=_qz_next, width="stretch")
-    st.divider()
+    st.write("")
     st.button("그만하기", on_click=_qz_reset)
 
 
 # ───────────────────────── 페이지: 목록(검색/수정/삭제) ─────────────────────────
 def page_list():
+    st.subheader("내 단어장")
+    tab1, tab2 = st.tabs(["목록", "백업 · 복원"])
+    with tab1:
+        _list_cards()
+    with tab2:
+        page_backup()
+
+
+def _list_cards():
     ss = st.session_state
     ss.setdefault("ed_ver", 0)
-    st.subheader("📋 카드 목록")
     df = load_df()
     if df.empty:
         st.info("카드가 없어.")
@@ -713,7 +893,6 @@ def page_list():
 
 # ───────────────────────── 페이지: 백업 ─────────────────────────
 def page_backup():
-    st.subheader("💾 백업 / 복원")
     df = load_df()
 
     st.markdown("##### 내보내기")
@@ -759,14 +938,15 @@ def page_backup():
 
 
 # ───────────────────────── 메인 ─────────────────────────
-st.session_state.setdefault("page", PAGES[0])
-page = st.radio("메뉴", PAGES, key="page", horizontal=True, label_visibility="collapsed")
+if st.session_state.get("page") not in PAGES:
+    st.session_state.page = PAGES[0]
+with st.container(key="nav"):
+    page = st.radio("메뉴", PAGES, key="page", horizontal=True, label_visibility="collapsed")
 
 {
     "🏠 홈": page_home,
-    "➕ 추가": page_add,
     "🃏 복습": page_review,
+    "➕ 추가": page_add,
     "📝 퀴즈": page_quiz,
     "📋 목록": page_list,
-    "💾 백업": page_backup,
 }[page]()

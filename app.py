@@ -32,8 +32,8 @@ XP = {"good": 10, "hard": 5, "again": 2, "quiz_ok": 5, "quiz_ng": 1}
 XP_PER_LEVEL = 500
 
 # 하늘색 테마
-SKY, SKY_D, SKY_L, SKY_M = "#2B9FE6", "#0B5E91", "#E4F4FD", "#9BD3F5"
-INK, MUTED, LINE = "#1B2B38", "#6B7F8E", "#D9EAF5"
+SKY, SKY_D, SKY_L, SKY_M = "#A8D8F3", "#2F6E96", "#F0F8FD", "#CFE9F8"
+INK, MUTED, LINE = "#2E3E4B", "#7F909D", "#E5F0F7"
 
 st.set_page_config(page_title="영어 암기장", page_icon="📚", layout="centered")
 
@@ -55,9 +55,9 @@ st.markdown(
         border-radius: 14px; border: 1.5px solid {LINE}; background: #fff; color: {INK};
     }}
     button[kind="primary"], [data-testid="stBaseButton-primary"] {{
-        background: {SKY} !important; border-color: {SKY} !important; color: #fff !important;
+        background: {SKY} !important; border-color: {SKY} !important; color: {SKY_D} !important;
     }}
-    button[kind="primary"]:hover, [data-testid="stBaseButton-primary"]:hover {{background: #1E8AD0 !important;}}
+    button[kind="primary"]:hover, [data-testid="stBaseButton-primary"]:hover {{background: #96CDEE !important;}}
 
     /* 상단 탭바 */
     .st-key-nav {{
@@ -90,9 +90,9 @@ st.markdown(
     /* 복습 평가 버튼 한 줄로 */
     .st-key-grade [data-testid="stHorizontalBlock"] {{flex-wrap: nowrap !important; gap: 8px;}}
     .st-key-grade [data-testid="stColumn"] {{min-width: 0 !important; width: auto !important; flex: 1 1 0 !important;}}
-    .st-key-again button {{background: #FDECEC !important; color: #9B2C2C !important; border: none !important;}}
-    .st-key-hard button {{background: #FFF3DC !important; color: #8A5A0B !important; border: none !important;}}
-    .st-key-good button {{background: {SKY} !important; color: #fff !important; border: none !important;}}
+    .st-key-again button {{background: #FDF3F3 !important; color: #A24E4E !important; border: none !important;}}
+    .st-key-hard button {{background: #FFF8EC !important; color: #8A6524 !important; border: none !important;}}
+    .st-key-good button {{background: {SKY} !important; color: {SKY_D} !important; border: none !important;}}
 
     /* 퀴즈 보기 */
     .st-key-opts .stButton button {{justify-content: flex-start; text-align: left; padding: 0 18px;}}
@@ -277,14 +277,14 @@ def progress_html(ratio, right_text, color=SKY):
 
 
 def answer_html(answer, example="", note=""):
-    ex = "".join(f'<div style="margin-top:6px;font-size:15px;color:#0F5A44;">{esc(l)}</div>'
+    ex = "".join(f'<div style="margin-top:6px;font-size:15px;color:#43796A;">{esc(l)}</div>'
                  for l in (example or "").splitlines() if l.strip())
     nt = "".join(f'<div style="font-size:13px;color:{MUTED};margin-top:4px;">{esc(l)}</div>'
                  for l in (note or "").splitlines() if l.strip())
-    nt = f'<div style="border-top:1px solid #CDEBDF;margin-top:10px;padding-top:8px;">{nt}</div>' if nt else ""
+    nt = f'<div style="border-top:1px solid #DCF1E8;margin-top:10px;padding-top:8px;">{nt}</div>' if nt else ""
     return f"""
-    <div style="background:#E6F6EF;border-radius:18px;padding:16px 18px;margin:0 0 12px;">
-      <div style="font-size:1.25rem;font-weight:700;color:#0B4A38;">{esc(answer)}</div>{ex}{nt}
+    <div style="background:#EFF9F4;border-radius:18px;padding:16px 18px;margin:0 0 12px;">
+      <div style="font-size:1.25rem;font-weight:700;color:#2F6A57;">{esc(answer)}</div>{ex}{nt}
     </div>"""
 
 
@@ -335,7 +335,7 @@ def page_home():
     show(f"""
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <div style="font-size:24px;font-weight:800;color:{INK};letter-spacing:-0.03em;">영어 암기장</div>
-      {pill(f"{fire} {s['streak']}일 연속", "#FFEDE6", "#9A3412")}
+      {pill(f"{fire} {s['streak']}일 연속", "#FFF2EC", "#A65E3E")}
     </div>
     <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:{MUTED};">
       <span>Lv. {s['level']}</span><span>{s['in_level']} / {XP_PER_LEVEL} XP</span>
@@ -344,7 +344,7 @@ def page_home():
 
     if df.empty:
         show(f"""
-        <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:#fff;margin:6px 0 10px;">
+        <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:{SKY_D};margin:6px 0 10px;">
           <div style="font-size:14px;opacity:.85;">시작해볼까?</div>
           <div style="font-size:26px;font-weight:800;margin-top:2px;">첫 단어를 넣어봐</div>
         </div>""")
@@ -360,7 +360,7 @@ def page_home():
     else:
         title, sub = "오늘 복습 끝! 👏", "잘했어"
     show(f"""
-    <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:#fff;margin:6px 0 10px;">
+    <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:{SKY_D};margin:6px 0 10px;">
       <div style="font-size:14px;opacity:.85;">{sub}</div>
       <div style="font-size:28px;font-weight:800;margin-top:2px;">{title}</div>
     </div>""")
@@ -372,14 +372,14 @@ def page_home():
     show(f"""
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:8px 0 14px;">
       {tile("오늘 복습한 것", f"{s['today_reviews']}개")}
-      {tile("암기 완료", f"{mastered}개", "#E6F6EF", "#0B4A38")}
-      {tile("전체 카드", f"{len(df)}개", "#F1F4F7", INK)}
-      {tile("총 경험치", f"{s['total']} XP", "#FFF3DC", "#7A4A06")}
+      {tile("암기 완료", f"{mastered}개", "#EFF9F4", "#2F6A57")}
+      {tile("전체 카드", f"{len(df)}개", "#F5F7F9", INK)}
+      {tile("총 경험치", f"{s['total']} XP", "#FFF8EC", "#8A6524")}
     </div>""")
 
     counts = df["kind"].value_counts()
     show('<div style="display:flex;flex-wrap:wrap;gap:6px;">'
-         + "".join(pill(f"{k} {counts.get(k, 0)}", "#F1F4F7", MUTED) for k in KINDS) + "</div>")
+         + "".join(pill(f"{k} {counts.get(k, 0)}", "#F5F7F9", MUTED) for k in KINDS) + "</div>")
 
 
 # ───────────────────────── 자동 완성 ─────────────────────────
@@ -791,9 +791,9 @@ def page_quiz():
                 st.button(opt, key=f"qz_{qz['i']}_{k}", on_click=_qz_pick, args=(opt,), width="stretch")
             else:
                 if opt == item["ans"]:
-                    bg, fg, bd, mark = "#E6F6EF", "#0B4A38", "#7CCFAE", "✅ "
+                    bg, fg, bd, mark = "#EFF9F4", "#2F6A57", "#B2E1CD", "✅ "
                 elif opt == qz["picked"]:
-                    bg, fg, bd, mark = "#FDECEC", "#9B2C2C", "#F2A7A7", "❌ "
+                    bg, fg, bd, mark = "#FDF3F3", "#A24E4E", "#F2CACA", "❌ "
                 else:
                     bg, fg, bd, mark = "#fff", MUTED, LINE, ""
                 show(f'<div style="background:{bg};color:{fg};border:1.5px solid {bd};border-radius:14px;'

@@ -4,6 +4,7 @@
 """
 import html
 import json
+import re
 import random
 import sqlite3
 from datetime import datetime, timedelta
@@ -32,7 +33,8 @@ st.markdown(
     """
     <style>
     #MainMenu, footer {visibility: hidden;}
-    .block-container {padding-top: 1.2rem; padding-bottom: 3rem;}
+    header[data-testid="stHeader"], [data-testid="stToolbar"] {display: none;}
+    .block-container {padding-top: 3rem; padding-bottom: 5rem;}
     div.stButton > button {min-height: 3rem; font-size: 1.05rem; border-radius: 12px;}
     div[role="radiogroup"] {flex-wrap: wrap; gap: .25rem;}
     </style>
@@ -227,8 +229,8 @@ AI_PROMPT = """너는 한국인 영어 학습자를 위한 단어장 도우미�
 아래 영어 항목 각각에 대해 JSON 배열만 출력해. 설명이나 코드블록 없이 JSON만.
 각 원소 형식:
 {"front": 원문 그대로, "kind": "단어"|"숙어"|"구동사"|"표현" 중 하나,
- "back": 자주 쓰는 한국어 뜻 1~3개를 쉼표로 구분,
- "example": 자연스러운 영어 예문 1개 + 공백 + (한국어 해석)}
+ "back": 자주 쓰는 한국어 뜻을 자주 쓰는 순서로 최대 4개, 쉼표로 구분,
+ "example": 뜻마다 예문 하나씩, 뜻 순서대로 한 줄에 하나씩. 각 줄은 "1) 영어 예문 (한국어 해석)" 형식}
 항목:
 """
 
@@ -271,25 +273,80 @@ def ai_fill(words):
     return [by_word.get(w.lower()) or (data[i] if i < len(data) else {}) for i, w in enumerate(words)]
 
 
+MYMEMORY_URL = "https://api.mymemory.translated.net/get"
+DICT_URL = "https://api.dictionaryapi.dev/api/v2/entries/en/"
+WIKI_URL = "https://en.wiktionary.org/api/rest_v1/page/definition/"
+UA = {"User-Agent": "vocab-app/1.0 (personal study app)"}
+HANGUL = re.compile("[가-힣]")
+TAG = re.compile(r"<[^>]+>")
+POS_KO = {"noun": "명", "verb": "동", "adjective": "형", "adverb": "부", "preposition": "전",
+          "phrase": "구", "idiom": "관용", "prepositional phrase": "전치사구", "interjection": "감"}
+MAX_SENSES = 4
+
+
+def _clean(s):
+    return html.unescape(TAG.sub("", s or "")).strip()
+
+
+def _ko_meanings(word):
+    """MyMemory 번역 결과 + 번역 메모리 후보들에서 한국어 뜻 여러 개 모으기"""
+    out = []
+    try:
+        j = requests.get(MYMEMORY_URL, params={"q": word, "langpair": "en|ko"}, timeout=8).json()
+        cands = [j.get("responseData", {}).get("translatedText", "")]
+        matches = sorted(j.get("matches") or [], key=lambda m: -float(m.get("match") or 0))
+        cands += [m.get("translation", "") for m in matches
+                  if str(m.get("segment", "")).strip().lower() == word.lower()]
+        for c in cands:
+            for part in re.split(r"[,;/·]", str(c)):
+                p = part.strip().strip(".")
+                if p and HANGUL.search(p) and len(p) <= 20 and p not in out:
+                    out.append(p)
+    except Exception:
+        pass
+    return out[:MAX_SENSES]
+
+
+def _en_senses(word):
+    """[(품사, 영영 뜻, 예문)] — 예문 있는 뜻 우선. 구동사·숙어는 위키낱말사전으로 보충"""
+    senses = []
+    try:
+        r = requests.get(DICT_URL + quote(word), timeout=8)
+        if r.ok:
+            for e in r.json():
+                for m in e.get("meanings", []):
+                    for d in m.get("definitions", []):
+                        senses.append((m.get("partOfSpeech", ""), d.get("definition", ""), d.get("example", "")))
+    except Exception:
+        pass
+    if not any(s[2] for s in senses):
+        try:
+            r = requests.get(WIKI_URL + quote(word.replace(" ", "_")), headers=UA, timeout=8)
+            if r.ok:
+                for e in r.json().get("en", []):
+                    for d in e.get("definitions", []):
+                        exs = [x.get("example", "") for x in d.get("parsedExamples") or []] or d.get("examples") or []
+                        senses.append((e.get("partOfSpeech", "").lower(), _clean(d.get("definition")),
+                                       _clean(exs[0]) if exs else ""))
+        except Exception:
+            pass
+    senses = [s for s in senses if s[1]]
+    return [s for s in senses if s[2]] + [s for s in senses if not s[2]]
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def free_fill(word):
-    """키 없이: 뜻은 MyMemory 번역, 예문은 Free Dictionary API"""
-    res = {"front": word, "kind": guess_kind(word), "back": "", "example": ""}
-    try:
-        r = requests.get("https://api.mymemory.translated.net/get",
-                         params={"q": word, "langpair": "en|ko"}, timeout=8)
-        res["back"] = r.json()["responseData"]["translatedText"]
-    except Exception:
-        pass
-    try:
-        r = requests.get(f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote(word)}", timeout=8)
-        if r.ok:
-            res["example"] = next(
-                (d["example"] for e in r.json() for m in e.get("meanings", [])
-                 for d in m.get("definitions", []) if d.get("example")), "")
-    except Exception:
-        pass
-    return res
+    """키 없이: 한국어 뜻은 MyMemory, 영영 뜻·예문은 Free Dictionary / Wiktionary"""
+    meanings = _ko_meanings(word)
+    senses = _en_senses(word)[:max(2, min(MAX_SENSES, len(meanings)))]
+    examples = [ex for _, _, ex in senses if ex]
+    return {
+        "front": word,
+        "kind": guess_kind(word),
+        "back": ", ".join(meanings),
+        "example": "\n".join(f"{i}) {ex}" for i, ex in enumerate(examples, 1)),
+        "note": "\n".join(f"({POS_KO.get(p, p)}) {d}" if p else d for p, d, _ in senses),
+    }
 
 
 def autofill(words):
@@ -314,10 +371,9 @@ def _autofill_one():
         ss.a_msg = ("warning", "영어를 먼저 입력해줘.")
         return
     (r,), src = autofill([word])
-    if r.get("back"):
-        ss.a_back = r["back"]
-    if r.get("example"):
-        ss.a_example = r["example"]
+    ss.a_back = r.get("back", "")
+    ss.a_example = r.get("example", "")
+    ss.a_note = r.get("note", "")
     if r.get("kind") in KINDS:
         ss.a_kind = r["kind"]
     if r.get("back") or r.get("example"):
@@ -359,8 +415,8 @@ def page_add():
             getattr(st, level)(text)
         st.selectbox("종류", KINDS, key="a_kind")
         st.text_input("뜻", key="a_back", placeholder="e.g. ~을 고대하다")
-        st.text_area("예문 (선택)", key="a_example", height=80)
-        st.text_input("메모 (선택)", key="a_note", placeholder="유의어, 헷갈리는 점 등")
+        st.text_area("예문 (선택)", key="a_example", height=110)
+        st.text_area("메모 (선택)", key="a_note", height=80, placeholder="영영 뜻, 유의어, 헷갈리는 점 등")
         st.button("추가", type="primary", on_click=_add_one, width="stretch")
 
     with tab2:
@@ -396,7 +452,7 @@ def page_add():
                 if not back:
                     skipped.append(f"{front} (뜻 없음)")
                     continue
-                ok, msg = add_card(kind, front, back, ex)
+                ok, msg = add_card(kind, front, back, ex, r.get("note", ""))
                 added += ok
                 if not ok:
                     skipped.append(msg)
@@ -475,9 +531,9 @@ def page_review():
         if not en_first:
             speak_button(c["front"])
         if c["example"]:
-            st.markdown(f"> {c['example']}")
+            st.markdown("\n".join(f"> {l}  " for l in c["example"].splitlines() if l.strip()))
         if c["note"]:
-            st.caption(f"📝 {c['note']}")
+            st.caption("  \n".join(["📝"] + [l for l in c["note"].splitlines() if l.strip()]))
         b1, b2, b3 = st.columns(3)
         b1.button("😵 몰라요", on_click=_rv_answer, args=("again",), width="stretch")
         b2.button("🤔 헷갈려요", on_click=_rv_answer, args=("hard",), width="stretch")

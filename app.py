@@ -30,9 +30,10 @@ PAGES = ["🏠 홈", "🃏 복습", "➕ 추가", "📝 퀴즈", "📋 목록"]
 
 
 # 하늘색 테마
-SKY, SKY_D, SKY_L, SKY_M = "#cfe7f6", "#2F6E96", "#F0F8FD", "#CFE9F8"
+SKY, SKY_D, SKY_L, SKY_M = "#A9D7F3", "#2F6E96", "#F0F8FD", "#CFE9F8"
 SKY_ON = "#24506E"  # 연하늘 위에 올라가는 글씨
 DEEP = "#455B6C"    # 오늘의 복습 카드 · 주요 버튼
+HERO_BG = "#CFE7F6"  # 오늘의 복습 카드 배경
 SURF, NAVBG = "#fff", "rgba(255,255,255,.96)"
 INK, MUTED, LINE = "#2E3E4B", "#7F909D", "#E5F0F7"
 
@@ -355,6 +356,16 @@ def go_to(page):
     st.session_state.page = page
 
 
+def start_due_review():
+    """오늘 복습할 카드로 바로 시작. 없으면 복습 설정 화면으로"""
+    ss = st.session_state
+    ids = card_ids(KINDS, True)
+    ss.page = "🃏 복습"
+    if ids:
+        random.shuffle(ids)
+        ss.update(rv_queue=ids, rv_dir="영어 → 뜻", rv_show=False, rv_done=0, rv_total=len(ids))
+
+
 WEAK_MIN = 2  # 몰라요를 이만큼 이상 누른 (아직 암기 완료 안 된) 단어 = 자주 틀리는 단어
 
 
@@ -433,18 +444,17 @@ def page_home():
     mastered = int((df["box"] >= MASTERED_BOX).sum())
 
     if due:
-        title, sub = f"{due}개", "오늘의 복습"
+        title, sub = f"{due}개", "오늘의 복습 ›"
     else:
-        title, sub = "오늘 복습 끝! 👏", "잘했어"
-    show(f"""
-    <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:{DEEP};margin:6px 0 10px;">
-      <div style="font-size:14px;opacity:.85;">{sub}</div>
-      <div style="font-size:28px;font-weight:800;margin-top:2px;">{title}</div>
-    </div>""")
-    if due:
-        st.button("복습 시작하기", type="primary", on_click=go_to, args=("🃏 복습",), width="stretch")
-    else:
-        st.button("퀴즈로 한 번 더 다지기", on_click=go_to, args=("📝 퀴즈",), width="stretch")
+        title, sub = "오늘 복습 끝! 👏", "잘했어 · 눌러서 더 복습하기 ›"
+    # 카드 전체가 버튼: 누르면 오늘 복습할 카드로 바로 시작
+    with st.container(key="tile_hero"):
+        show(f"""
+        <div style="background:{HERO_BG};border-radius:22px;padding:22px 20px;color:{DEEP};margin:6px 0 4px;">
+          <div style="font-size:14px;opacity:.85;">{sub}</div>
+          <div style="font-size:28px;font-weight:800;margin-top:2px;">{title}</div>
+        </div>""")
+        st.button("오늘의 복습", key="tilebtn_hero", on_click=start_due_review)
 
     reviewed = int(df["last_reviewed"].fillna("").str.startswith(t).sum())
     with st.container(key="tiles"):

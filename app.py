@@ -4,6 +4,7 @@
 """
 import html
 import json
+import os
 import re
 import random
 import sqlite3
@@ -32,7 +33,10 @@ XP = {"good": 10, "hard": 5, "again": 2, "quiz_ok": 5, "quiz_ng": 1}
 XP_PER_LEVEL = 500
 
 # 하늘색 테마
-SKY, SKY_D, SKY_L, SKY_M = "#A8D8F3", "#2F6E96", "#F0F8FD", "#CFE9F8"
+SKY, SKY_D, SKY_L, SKY_M = "#A9D7F3", "#2F6E96", "#F0F8FD", "#CFE9F8"
+SKY_ON = "#24506E"  # 연하늘 위에 올라가는 글씨
+DEEP = "#455B6C"    # 오늘의 복습 카드 · 주요 버튼
+SURF, NAVBG = "#fff", "rgba(255,255,255,.96)"
 INK, MUTED, LINE = "#2E3E4B", "#7F909D", "#E5F0F7"
 
 st.set_page_config(page_title="영어 암기장", page_icon="📚", layout="centered")
@@ -52,17 +56,17 @@ st.markdown(
     /* 버튼 */
     .stButton button, .stDownloadButton button {{
         min-height: 3.1rem; font-size: 1.02rem; font-weight: 600;
-        border-radius: 14px; border: 1.5px solid {LINE}; background: #fff; color: {INK};
+        border-radius: 14px; border: 1.5px solid {LINE}; background: {SURF}; color: {INK};
     }}
     button[kind="primary"], [data-testid="stBaseButton-primary"] {{
-        background: {SKY} !important; border-color: {SKY} !important; color: {SKY_D} !important;
+        background: {SKY} !important; border-color: {SKY} !important; color: {DEEP} !important;
     }}
-    button[kind="primary"]:hover, [data-testid="stBaseButton-primary"]:hover {{background: #96CDEE !important;}}
+    button[kind="primary"]:hover, [data-testid="stBaseButton-primary"]:hover {{background: #96CBEE !important;}}
 
     /* 상단 탭바 */
     .st-key-nav {{
         position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
-        background: rgba(255,255,255,.96); border-bottom: 1px solid {LINE}; padding: 6px 6px 0;
+        background: {NAVBG}; border-bottom: 1px solid {LINE}; padding: 6px 6px 0;
     }}
     .st-key-nav > div, .st-key-nav [data-testid="stElementContainer"], .st-key-nav [data-testid="stRadio"] {{
         width: 100% !important;
@@ -92,10 +96,15 @@ st.markdown(
     .st-key-grade [data-testid="stColumn"] {{min-width: 0 !important; width: auto !important; flex: 1 1 0 !important;}}
     .st-key-again button {{background: #FDF3F3 !important; color: #A24E4E !important; border: none !important;}}
     .st-key-hard button {{background: #FFF8EC !important; color: #8A6524 !important; border: none !important;}}
-    .st-key-good button {{background: {SKY} !important; color: {SKY_D} !important; border: none !important;}}
+    .st-key-good button {{background: {SKY} !important; color: {DEEP} !important; border: none !important;}}
 
     /* 퀴즈 보기 */
     .st-key-opts .stButton button {{justify-content: flex-start; text-align: left; padding: 0 18px;}}
+
+    /* 추천 카드 아래 버튼 한 줄로 */
+    [class*="st-key-rowrec"] [data-testid="stHorizontalBlock"] {{flex-wrap: nowrap !important; gap: 8px;}}
+    [class*="st-key-rowrec"] [data-testid="stColumn"] {{min-width: 0 !important; width: auto !important; flex: 1 1 0 !important;}}
+    [class*="st-key-rowrec"] .stButton button {{min-height: 2.6rem; font-size: .95rem;}}
     </style>
     """,
     unsafe_allow_html=True,
@@ -121,6 +130,15 @@ def get_conn():
             wrong INTEGER DEFAULT 0,
             created TEXT NOT NULL,
             last_reviewed TEXT
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS bank(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT,
+            front TEXT UNIQUE COLLATE NOCASE,
+            back TEXT DEFAULT '',
+            example TEXT DEFAULT ''
         )"""
     )
     conn.execute(
@@ -256,7 +274,7 @@ def pill(text, bg=SKY_L, fg=SKY_D):
 def card_html(main, sub=""):
     sub_html = f'<div style="margin-bottom:14px">{pill(sub)}</div>' if sub else ""
     return f"""
-    <div style="background:#fff;border:2px solid {SKY_M};border-radius:22px;padding:30px 18px;
+    <div style="background:{SURF};border:2px solid {SKY_M};border-radius:22px;padding:30px 18px;
                 text-align:center;margin:6px 0 12px;">
       {sub_html}
       <div style="font-size:1.9rem;font-weight:700;line-height:1.3;color:{INK};word-break:break-word;">
@@ -344,11 +362,12 @@ def page_home():
 
     if df.empty:
         show(f"""
-        <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:{SKY_D};margin:6px 0 10px;">
+        <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:{DEEP};margin:6px 0 10px;">
           <div style="font-size:14px;opacity:.85;">시작해볼까?</div>
           <div style="font-size:26px;font-weight:800;margin-top:2px;">첫 단어를 넣어봐</div>
         </div>""")
         st.button("단어 추가하기", type="primary", on_click=go_to, args=("➕ 추가",), width="stretch")
+        home_recs()
         return
 
     t = today().isoformat()
@@ -360,7 +379,7 @@ def page_home():
     else:
         title, sub = "오늘 복습 끝! 👏", "잘했어"
     show(f"""
-    <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:{SKY_D};margin:6px 0 10px;">
+    <div style="background:{SKY};border-radius:22px;padding:22px 20px;color:{DEEP};margin:6px 0 10px;">
       <div style="font-size:14px;opacity:.85;">{sub}</div>
       <div style="font-size:28px;font-weight:800;margin-top:2px;">{title}</div>
     </div>""")
@@ -380,6 +399,22 @@ def page_home():
     counts = df["kind"].value_counts()
     show('<div style="display:flex;flex-wrap:wrap;gap:6px;">'
          + "".join(pill(f"{k} {counts.get(k, 0)}", "#F5F7F9", MUTED) for k in KINDS) + "</div>")
+
+    home_recs()
+
+
+def home_recs():
+    ss = st.session_state
+    if not bank_rows():
+        return
+    if "rec_home" not in ss:
+        _rec_new("rec_home", 3, KINDS)
+    show(f'<div style="font-size:18px;font-weight:700;color:{INK};margin:18px 0 4px;">오늘의 추천</div>')
+    if not ss.rec_home:
+        st.caption("추천 목록에 있는 건 다 단어장에 들어갔어 👏")
+        return
+    show_recs("rec_home", KINDS)
+    st.button("🎲 다른 추천 보기", on_click=_rec_new, args=("rec_home", 3, KINDS), width="stretch")
 
 
 # ───────────────────────── 자동 완성 ─────────────────────────
@@ -525,6 +560,195 @@ def autofill(words):
     return [free_fill(w) for w in words], "무료 사전"
 
 
+# ───────────────────────── 추천 (엑셀/CSV 목록에서 랜덤) ─────────────────────────
+BANK_FILES = ["bank.xlsx", "bank.csv"]  # 저장소에 이 이름으로 올려두면 앱이 재시작돼도 유지됨
+COLMAP = {
+    "front": ["front", "영어", "단어", "표현", "숙어", "구동사", "word", "phrase", "english", "expression"],
+    "back": ["back", "뜻", "의미", "meaning", "korean", "한국어", "해석"],
+    "example": ["example", "예문", "sentence"],
+    "kind": ["kind", "종류", "type", "category", "분류"],
+}
+ALL_HEADER_NAMES = {n for names in COLMAP.values() for n in names}
+
+
+def _parse_sheet(raw, sheet_kind=None):
+    """헤더가 있으면 열 이름으로, 없으면 1열=영어, 2열=뜻, 3열=예문으로 읽기"""
+    raw = raw.fillna("").astype(str)
+    if raw.empty:
+        return []
+    first = [str(x).strip().lower() for x in raw.iloc[0]]
+    if any(f in ALL_HEADER_NAMES for f in first):
+        idx = {}
+        for key, names in COLMAP.items():
+            for i, f in enumerate(first):
+                if f in names and key not in idx and i not in idx.values():
+                    idx[key] = i
+        body = raw.iloc[1:]
+    else:
+        idx, body = {"front": 0, "back": 1, "example": 2}, raw
+    rows = []
+    for _, r in body.iterrows():
+        def get(k):
+            return str(r.iloc[idx[k]]).strip() if k in idx and idx[k] < len(r) else ""
+        front = get("front")
+        if not front:
+            continue
+        kind = get("kind")
+        if kind not in KINDS:
+            kind = sheet_kind if sheet_kind in KINDS else guess_kind(front)
+        rows.append((kind, front, get("back"), get("example")))
+    return rows
+
+
+def read_bank_file(f):
+    """엑셀(시트 여러 개 가능, 시트 이름이 '구동사'·'숙어'면 종류로 씀) 또는 CSV 읽기"""
+    name = str(getattr(f, "name", f)).lower()
+    if name.endswith((".xlsx", ".xls")):
+        sheets = pd.read_excel(f, sheet_name=None, header=None, dtype=str)
+        return [row for sn, df in sheets.items() for row in _parse_sheet(df, str(sn).strip())]
+    try:
+        raw = pd.read_csv(f, header=None, dtype=str, encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        if hasattr(f, "seek"):
+            f.seek(0)
+        raw = pd.read_csv(f, header=None, dtype=str, encoding="cp949")
+    return _parse_sheet(raw)
+
+
+@st.cache_data(show_spinner=False)
+def _repo_bank(path, mtime):
+    return read_bank_file(path)
+
+
+def bank_rows():
+    rows = {}
+    for p in BANK_FILES:
+        if os.path.exists(p):
+            try:
+                for r in _repo_bank(p, os.path.getmtime(p)):
+                    rows.setdefault(r[1].lower(), r)
+            except Exception:
+                pass
+    for r in get_conn().execute("SELECT kind, front, back, example FROM bank").fetchall():
+        rows.setdefault(r["front"].lower(), tuple(r))
+    return list(rows.values())
+
+
+def recommend(n, kinds, exclude=()):
+    """내 단어장에 없는 것 중에서 랜덤으로 n개"""
+    have = {r["front"].lower() for r in get_conn().execute("SELECT front FROM cards").fetchall()}
+    have |= {e.lower() for e in exclude}
+    pool = [r for r in bank_rows() if r[1].lower() not in have and r[0] in kinds]
+    return random.sample(pool, min(n, len(pool))), len(pool)
+
+
+def rec_html(kind, front, back, example):
+    ex = next((l for l in (example or "").splitlines() if l.strip()), "")
+    back_html = (f'<div style="color:{INK};margin-top:4px;">{esc(back)}</div>' if back else
+                 f'<div style="color:{MUTED};font-size:13px;margin-top:4px;">뜻·예문은 추가할 때 자동으로 채워져</div>')
+    ex_html = f'<div style="color:{MUTED};font-size:14px;margin-top:4px;">{esc(ex)}</div>' if ex else ""
+    return (f'<div style="background:{SURF};border:1.5px solid {LINE};border-radius:18px;padding:14px 16px;margin:4px 0 6px;">'
+            f'{pill(kind)}<div style="font-size:1.25rem;font-weight:700;color:{INK};margin-top:8px;">{esc(front)}</div>'
+            f'{back_html}{ex_html}</div>')
+
+
+def _rec_add(listkey, i):
+    ss = st.session_state
+    kind, front, back, ex = ss[listkey][i]
+    note = ""
+    if not back or not ex:
+        (r,), _ = autofill([front])
+        back, ex, note = back or r.get("back", ""), ex or r.get("example", ""), r.get("note", "")
+    if not back:
+        ss.rec_msg = ("warning", f"'{front}' 뜻을 못 찾았어. ➕ 추가에서 직접 넣어줘.")
+        return
+    ok, msg = add_card(kind, front, back, ex, note)
+    ss.rec_msg = ("success" if ok else "warning", msg)
+    ss[listkey].pop(i)
+
+
+def _rec_skip(listkey, i, kinds):
+    ss = st.session_state
+    shown = [r[1] for r in ss[listkey]]
+    ss[listkey].pop(i)
+    new, _ = recommend(1, kinds, exclude=shown)
+    ss[listkey] += new
+
+
+def _rec_new(listkey, n, kinds):
+    st.session_state[listkey], _ = recommend(n, kinds)
+
+
+def show_recs(listkey, kinds):
+    ss = st.session_state
+    if ss.get("rec_msg"):
+        level, text = ss.pop("rec_msg")
+        getattr(st, level)(text)
+    for i, (kind, front, back, ex) in enumerate(ss.get(listkey, [])):
+        show(rec_html(kind, front, back, ex))
+        with st.container(key=f"rowrec_{listkey}_{i}"):
+            c1, c2 = st.columns(2)
+            c1.button("+ 단어장에 추가", key=f"{listkey}_add_{i}_{front}", type="primary",
+                      on_click=_rec_add, args=(listkey, i), width="stretch")
+            c2.button("패스", key=f"{listkey}_skip_{i}_{front}",
+                      on_click=_rec_skip, args=(listkey, i, kinds), width="stretch")
+
+
+def _rec_add_all(listkey):
+    for _ in range(len(st.session_state.get(listkey, []))):
+        before = len(st.session_state[listkey])
+        _rec_add(listkey, 0)
+        if len(st.session_state[listkey]) == before:  # 뜻 못 찾은 건 건너뛰고 다음 걸로
+            st.session_state[listkey].append(st.session_state[listkey].pop(0))
+    st.session_state.rec_msg = ("success", "보이던 추천을 단어장에 넣었어")
+
+
+def rec_tab():
+    ss = st.session_state
+    total = len(bank_rows())
+    if total:
+        _, left = recommend(0, KINDS)
+        st.caption(f"추천 목록 {total}개 · 그중 내 단어장에 없는 것 {left}개")
+        kinds = st.multiselect("종류", KINDS, default=KINDS, key="rec_kinds")
+        n = st.slider("몇 개씩 볼까", 3, 20, 5, key="rec_n")
+        st.button("🎲 새로 뽑기", on_click=_rec_new, args=("rec_add", n, kinds), width="stretch")
+        if "rec_add" not in ss:
+            _rec_new("rec_add", n, kinds)
+        show_recs("rec_add", kinds)
+        if ss.get("rec_add"):
+            st.button("보이는 거 전부 추가", on_click=_rec_add_all, args=("rec_add",), width="stretch")
+    else:
+        st.info("아직 추천 목록이 없어. 아래에서 엑셀이나 CSV 파일을 넣어줘.")
+
+    with st.expander("📂 추천 목록 파일 넣기", expanded=not total):
+        st.caption("1열 영어, 2열 뜻(선택), 3열 예문(선택). 첫 줄에 `영어 / 뜻 / 예문 / 종류` 같은 제목이 있어도 돼. "
+                   "시트 이름을 `구동사`, `숙어`로 나눠두면 종류로 인식해.")
+        up = st.file_uploader("엑셀 또는 CSV", type=["xlsx", "xls", "csv"], key="bank_up")
+        if up and st.button("추천 목록에 넣기", type="primary", width="stretch"):
+            try:
+                rows = read_bank_file(up)
+            except Exception as e:
+                st.error(f"파일을 못 읽었어 ({e.__class__.__name__})")
+                rows = []
+            conn = get_conn()
+            before = conn.execute("SELECT COUNT(*) FROM bank").fetchone()[0]
+            conn.executemany("INSERT OR IGNORE INTO bank(kind, front, back, example) VALUES(?,?,?,?)", rows)
+            conn.commit()
+            added = conn.execute("SELECT COUNT(*) FROM bank").fetchone()[0] - before
+            ss.pop("rec_add", None)
+            ss.pop("rec_home", None)
+            st.success(f"{added}개 들어갔어 (중복 {len(rows) - added}개 제외)")
+        st.caption("💡 앱이 재시작되면 여기서 넣은 목록은 사라질 수 있어. 계속 쓸 거면 파일 이름을 `bank.xlsx`로 바꿔서 "
+                   "GitHub 저장소에 `app.py`랑 같이 올려두면 항상 유지돼.")
+        if get_conn().execute("SELECT COUNT(*) FROM bank").fetchone()[0]:
+            if st.button("여기서 넣은 추천 목록 비우기"):
+                get_conn().execute("DELETE FROM bank")
+                get_conn().commit()
+                ss.pop("rec_add", None)
+                ss.pop("rec_home", None)
+                st.rerun()
+
+
 # ───────────────────────── 페이지: 추가 ─────────────────────────
 def _autofill_one():
     ss = st.session_state
@@ -567,7 +791,7 @@ def page_add():
     if ss.get("ai_error"):
         st.warning(ss.pop("ai_error"))
 
-    tab1, tab2 = st.tabs(["하나씩", "여러 개 한번에"])
+    tab1, tab2, tab3 = st.tabs(["하나씩", "여러 개 한번에", "🎲 추천"])
 
     with tab1:
         st.text_input("영어", key="a_front", placeholder="e.g. look forward to")
@@ -622,6 +846,9 @@ def page_add():
             if skipped:
                 with st.expander(f"건너뜀 {len(skipped)}개"):
                     st.write("\n".join(f"- {s}" for s in skipped))
+
+    with tab3:
+        rec_tab()
 
 
 # ───────────────────────── 페이지: 복습(플래시카드) ─────────────────────────
@@ -773,7 +1000,7 @@ def page_quiz():
         if qz["wrong"]:
             st.markdown("##### 틀린 것")
             show("".join(
-                f'<div style="background:#fff;border:1.5px solid {LINE};border-radius:14px;padding:10px 14px;margin-bottom:8px;">'
+                f'<div style="background:{SURF};border:1.5px solid {LINE};border-radius:14px;padding:10px 14px;margin-bottom:8px;">'
                 f'<b style="color:{INK}">{esc(w["front"])}</b><div style="color:{MUTED};font-size:14px;">{esc(w["back"])}</div></div>'
                 for w in qz["wrong"]))
         else:
@@ -795,7 +1022,7 @@ def page_quiz():
                 elif opt == qz["picked"]:
                     bg, fg, bd, mark = "#FDF3F3", "#A24E4E", "#F2CACA", "❌ "
                 else:
-                    bg, fg, bd, mark = "#fff", MUTED, LINE, ""
+                    bg, fg, bd, mark = SURF, MUTED, LINE, ""
                 show(f'<div style="background:{bg};color:{fg};border:1.5px solid {bd};border-radius:14px;'
                      f'padding:13px 18px;margin-bottom:10px;font-weight:600;">{mark}{esc(opt)}</div>')
 

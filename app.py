@@ -30,7 +30,7 @@ PAGES = ["🏠 홈", "🃏 복습", "➕ 추가", "📝 퀴즈", "📋 목록"]
 
 
 # 하늘색 테마
-SKY, SKY_D, SKY_L, SKY_M = "##cfe7f6", "#2F6E96", "#F0F8FD", "#CFE9F8"
+SKY, SKY_D, SKY_L, SKY_M = "#cfe7f6", "#2F6E96", "#F0F8FD", "#CFE9F8"
 SKY_ON = "#24506E"  # 연하늘 위에 올라가는 글씨
 DEEP = "#455B6C"    # 오늘의 복습 카드 · 주요 버튼
 SURF, NAVBG = "#fff", "rgba(255,255,255,.96)"

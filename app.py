@@ -7,9 +7,11 @@ import json
 import random
 import sqlite3
 from datetime import datetime, timedelta
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -216,43 +218,189 @@ def page_home():
     st.dataframe(df["kind"].value_counts().rename("개수"), width="stretch")
 
 
+# ───────────────────────── 자동 완성 ─────────────────────────
+AI_MODEL = "claude-haiku-5-5"
+PARTICLES = {"up", "down", "off", "out", "in", "on", "away", "back", "over",
+             "through", "around", "about", "along", "across", "into", "after", "by"}
+
+AI_PROMPT = """너는 한국인 영어 학습자를 위한 단어장 도우미야.
+아래 영어 항목 각각에 대해 JSON 배열만 출력해. 설명이나 코드블록 없이 JSON만.
+각 원소 형식:
+{"front": 원문 그대로, "kind": "단어"|"숙어"|"구동사"|"표현" 중 하나,
+ "back": 자주 쓰는 한국어 뜻 1~3개를 쉼표로 구분,
+ "example": 자연스러운 영어 예문 1개 + 공백 + (한국어 해석)}
+항목:
+"""
+
+
+def get_api_key():
+    try:
+        return st.secrets.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        return ""
+
+
+def guess_kind(word):
+    w = word.lower().split()
+    if len(w) == 1:
+        return "단어"
+    if len(w) <= 3 and any(p in PARTICLES for p in w[1:]):
+        return "구동사"
+    return "숙어"
+
+
+def _parse_json(text):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+    return json.loads(text)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def ai_fill(words):
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=get_api_key())
+    msg = client.messages.create(
+        model=AI_MODEL,
+        max_tokens=300 + 200 * len(words),
+        messages=[{"role": "user", "content": AI_PROMPT + "\n".join(f"- {w}" for w in words)}],
+    )
+    data = _parse_json("".join(b.text for b in msg.content if b.type == "text"))
+    by_word = {str(d.get("front", "")).strip().lower(): d for d in data}
+    return [by_word.get(w.lower()) or (data[i] if i < len(data) else {}) for i, w in enumerate(words)]
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def free_fill(word):
+    """키 없이: 뜻은 MyMemory 번역, 예문은 Free Dictionary API"""
+    res = {"front": word, "kind": guess_kind(word), "back": "", "example": ""}
+    try:
+        r = requests.get("https://api.mymemory.translated.net/get",
+                         params={"q": word, "langpair": "en|ko"}, timeout=8)
+        res["back"] = r.json()["responseData"]["translatedText"]
+    except Exception:
+        pass
+    try:
+        r = requests.get(f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote(word)}", timeout=8)
+        if r.ok:
+            res["example"] = next(
+                (d["example"] for e in r.json() for m in e.get("meanings", [])
+                 for d in m.get("definitions", []) if d.get("example")), "")
+    except Exception:
+        pass
+    return res
+
+
+def autofill(words):
+    """(결과 리스트, 사용한 방식) 반환. AI 실패 시 무료 사전으로 대체"""
+    words = [w.strip() for w in words if w.strip()]
+    if get_api_key():
+        try:
+            out = []
+            for i in range(0, len(words), 20):
+                out += ai_fill(tuple(words[i:i + 20]))
+            return out, "AI"
+        except Exception as e:
+            st.session_state.ai_error = f"AI 호출 실패 → 무료 사전으로 대체 ({e.__class__.__name__})"
+    return [free_fill(w) for w in words], "무료 사전"
+
+
 # ───────────────────────── 페이지: 추가 ─────────────────────────
+def _autofill_one():
+    ss = st.session_state
+    word = ss.a_front.strip()
+    if not word:
+        ss.a_msg = ("warning", "영어를 먼저 입력해줘.")
+        return
+    (r,), src = autofill([word])
+    if r.get("back"):
+        ss.a_back = r["back"]
+    if r.get("example"):
+        ss.a_example = r["example"]
+    if r.get("kind") in KINDS:
+        ss.a_kind = r["kind"]
+    if r.get("back") or r.get("example"):
+        ss.a_msg = ("info", f"✨ {src}로 채웠어. 확인하고 고쳐서 추가해.")
+    else:
+        ss.a_msg = ("warning", "자동 완성 결과가 없어. 직접 입력해줘.")
+
+
+def _add_one():
+    ss = st.session_state
+    ok, msg = add_card(ss.a_kind, ss.a_front, ss.a_back, ss.a_example, ss.a_note)
+    ss.a_msg = ("success" if ok else "warning", msg)
+    if ok:
+        for k in ["a_front", "a_back", "a_example", "a_note"]:
+            ss[k] = ""
+
+
 def page_add():
+    ss = st.session_state
+    for k in ["a_front", "a_back", "a_example", "a_note"]:
+        ss.setdefault(k, "")
+    ss.setdefault("a_kind", KINDS[0])
+
     st.subheader("➕ 카드 추가")
+    if get_api_key():
+        st.caption("✨ 자동 완성: Claude AI")
+    else:
+        st.caption("✨ 자동 완성: 무료 사전 (구동사·숙어는 부정확할 수 있어. AI 키를 넣으면 훨씬 좋아져)")
+    if ss.get("ai_error"):
+        st.warning(ss.pop("ai_error"))
+
     tab1, tab2 = st.tabs(["하나씩", "여러 개 한번에"])
 
     with tab1:
-        with st.form("add_one", clear_on_submit=True):
-            kind = st.selectbox("종류", KINDS)
-            front = st.text_input("영어", placeholder="e.g. look forward to")
-            back = st.text_input("뜻", placeholder="e.g. ~을 고대하다")
-            example = st.text_area("예문 (선택)", height=70)
-            note = st.text_input("메모 (선택)", placeholder="유의어, 헷갈리는 점 등")
-            if st.form_submit_button("추가", type="primary", width="stretch"):
-                ok, msg = add_card(kind, front, back, example, note)
-                (st.success if ok else st.warning)(msg)
+        st.text_input("영어", key="a_front", placeholder="e.g. look forward to")
+        st.button("✨ 뜻·예문 자동 완성", on_click=_autofill_one, width="stretch")
+        if ss.get("a_msg"):
+            level, text = ss.pop("a_msg")
+            getattr(st, level)(text)
+        st.selectbox("종류", KINDS, key="a_kind")
+        st.text_input("뜻", key="a_back", placeholder="e.g. ~을 고대하다")
+        st.text_area("예문 (선택)", key="a_example", height=80)
+        st.text_input("메모 (선택)", key="a_note", placeholder="유의어, 헷갈리는 점 등")
+        st.button("추가", type="primary", on_click=_add_one, width="stretch")
 
     with tab2:
-        st.caption("한 줄에 하나씩: `영어 | 뜻 | 예문(선택)`  ·  엑셀에서 복붙(탭 구분)도 가능")
-        kind = st.selectbox("종류", KINDS, key="bulk_kind")
-        text = st.text_area(
-            "목록", height=200,
-            placeholder="give up | 포기하다 | Don't give up.\nrun out of | ~이 바닥나다\nin terms of | ~의 관점에서",
-        )
+        st.caption("한 줄에 하나씩. 영어만 써도 되고, `영어 | 뜻 | 예문`처럼 직접 써도 돼 (엑셀 복붙도 가능)")
+        kind_opt = st.selectbox("종류", ["자동"] + KINDS, key="bulk_kind")
+        fill = st.checkbox("비어 있는 뜻·예문 자동 채우기", value=True)
+        text = st.text_area("목록", height=200,
+                            placeholder="give up\nrun out of\nin terms of | ~의 관점에서")
         if st.button("한번에 추가", type="primary", width="stretch"):
-            added, skipped = 0, []
+            rows = []
             for line in text.splitlines():
                 if not line.strip():
                     continue
                 parts = [p.strip() for p in (line.split("\t") if "\t" in line else line.split("|"))]
-                if len(parts) < 2:
-                    skipped.append(f"{line} (형식 오류)")
+                parts += [""] * (3 - len(parts))
+                rows.append(parts[:3])
+
+            info = {}
+            need = [r[0] for r in rows if not r[1] or not r[2]]
+            if fill and need:
+                with st.spinner(f"{len(need)}개 자동 완성 중..."):
+                    results, src = autofill(need)
+                info = {w.lower(): r for w, r in zip(need, results)}
+                if ss.get("ai_error"):
+                    st.warning(ss.pop("ai_error"))
+
+            added, skipped = 0, []
+            for front, back, ex in rows:
+                r = info.get(front.lower(), {})
+                back = back or r.get("back", "")
+                ex = ex or r.get("example", "")
+                kind = kind_opt if kind_opt != "자동" else (r.get("kind") if r.get("kind") in KINDS else guess_kind(front))
+                if not back:
+                    skipped.append(f"{front} (뜻 없음)")
                     continue
-                ok, msg = add_card(kind, parts[0], parts[1], parts[2] if len(parts) > 2 else "")
+                ok, msg = add_card(kind, front, back, ex)
                 added += ok
                 if not ok:
                     skipped.append(msg)
-            st.success(f"{added}개 추가됨")
+            st.success(f"{added}개 추가됨 · 📋 목록에서 확인/수정할 수 있어")
             if skipped:
                 with st.expander(f"건너뜀 {len(skipped)}개"):
                     st.write("\n".join(f"- {s}" for s in skipped))

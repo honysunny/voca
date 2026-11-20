@@ -348,6 +348,45 @@ def go_to(page):
     st.session_state.page = page
 
 
+WEAK_MIN = 2  # 몰라요를 이만큼 이상 누른 (아직 암기 완료 안 된) 단어 = 자주 틀리는 단어
+
+
+def start_weak_review():
+    ss = st.session_state
+    ids = [r["id"] for r in get_conn().execute(
+        "SELECT id FROM cards WHERE wrong >= ? AND box < ?", (WEAK_MIN, MASTERED_BOX)).fetchall()]
+    if not ids:
+        ss.home_msg = f"아직 자주 틀리는 단어가 없어. 몰라요를 {WEAK_MIN}번 이상 누른 단어가 여기 모여."
+        return
+    random.shuffle(ids)
+    ss.update(rv_queue=ids, rv_dir="영어 → 뜻", rv_show=False, rv_done=0, rv_total=len(ids))
+    ss.page = "🃏 복습"
+
+
+def week_chart_html():
+    """최근 7일 복습 횟수 막대그래프 (복습 + 퀴즈 답한 수)"""
+    rows = {r["day"]: r["reviews"] for r in get_conn().execute("SELECT day, reviews FROM stats").fetchall()}
+    t = today()
+    days = [t - timedelta(days=i) for i in range(6, -1, -1)]
+    vals = [rows.get(d.isoformat(), 0) for d in days]
+    top = max(vals) or 1
+    names = "월화수목금토일"
+    bars = ""
+    for d, v in zip(days, vals):
+        is_today = d == t
+        h = max(4, round(v / top * 70)) if v else 4
+        color = SKY if v else "#E5EDF3"
+        bars += (f'<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">'
+                 f'<div style="font-size:11px;font-weight:600;color:{MUTED};height:14px;">{v or ""}</div>'
+                 f'<div style="width:70%;max-width:28px;height:{h}px;background:{color};border-radius:6px;"></div>'
+                 f'<div style="font-size:12px;font-weight:{700 if is_today else 500};'
+                 f'color:{DEEP if is_today else MUTED};">{"오늘" if is_today else names[d.weekday()]}</div></div>')
+    return (f'<div style="background:#F5F7F9;border-radius:16px;padding:14px 16px;margin-top:0;">'
+            f'<div style="display:flex;justify-content:space-between;font-size:13px;color:{INK};opacity:.8;">'
+            f'<span>최근 7일 복습</span><span>총 {sum(vals)}번</span></div>'
+            f'<div style="display:flex;align-items:flex-end;height:110px;margin-top:8px;">{bars}</div></div>')
+
+
 def go_list(view):
     st.session_state.page = "📋 목록"
     st.session_state.list_view = view
@@ -407,7 +446,17 @@ def page_home():
             tile_link("reviewed", "오늘 복습한 것", f"{reviewed}개", SKY_L, SKY_D, "오늘 복습한 것")
         with c2:
             tile_link("mastered", "암기 완료", f"{mastered}개", "#EFF9F4", "#2F6A57", "암기 완료")
-        tile_link("all", "전체 카드", f"{len(df)}개", "#F5F7F9", INK, "전체")
+        weak = int(((df["wrong"] >= WEAK_MIN) & (df["box"] < MASTERED_BOX)).sum())
+        c3, c4 = st.columns(2)
+        with c3:
+            tile_link("all", "전체 카드", f"{len(df)}개", "#F5F7F9", INK, "전체")
+        with c4:
+            with st.container(key="tile_weak"):
+                show(tile("자주 틀리는 단어 ›", f"{weak}개", "#FDF3F3", "#A24E4E"))
+                st.button("자주 틀리는 단어", key="tilebtn_weak", on_click=start_weak_review)
+        show(week_chart_html())
+    if ss_msg := st.session_state.pop("home_msg", None):
+        st.info(ss_msg)
 
     counts = df["kind"].value_counts()
     show('<div style="display:flex;flex-wrap:wrap;gap:6px;">'
